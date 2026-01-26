@@ -20,7 +20,6 @@ async def ws_scada(
     client = await ws.connect(websocket, lagoon_id)
 
     try:
-        # snapshot inmediato
         await websocket.send_json(state.snapshot(lagoon_id))
 
         while True:

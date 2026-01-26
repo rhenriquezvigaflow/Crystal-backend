@@ -18,18 +18,10 @@ from app.ws.manager import WebSocketManager
 from app.persist.worker import PersistWorker
 
 
-
-# =========================
-# SINGLETONS
-# =========================
-
 state_store = RealtimeStateStore()
 ws_manager = WebSocketManager()
 persist_worker = PersistWorker()
 
-# =========================
-# LIFESPAN
-# =========================
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -37,18 +29,10 @@ async def lifespan(app: FastAPI):
     yield
     await persist_worker.stop()
 
-# =========================
-# APP
-# =========================
-
 app = FastAPI(
     title="Crystal Lagoons SCADA Backend",
     lifespan=lifespan,
 )
-
-# =========================
-# DEPENDENCY OVERRIDES
-# =========================
 
 app.dependency_overrides[get_state_store] = lambda: state_store
 app.dependency_overrides[get_ws_manager] = lambda: ws_manager

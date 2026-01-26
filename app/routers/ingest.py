@@ -18,7 +18,7 @@ async def ingest_scada(
     db: Session = Depends(get_db),
     state = Depends(get_state_store),
     ws = Depends(get_ws_manager),
-    _ = Depends(verify_collector_key),  # 🔐 API KEY OBLIGATORIA
+    _ = Depends(verify_collector_key),  
 ):
     """
     Endpoint de ingest SCADA.
@@ -32,7 +32,7 @@ async def ingest_scada(
     ts = payload.timestamp
     tags = payload.tags
 
-    # 1️⃣ Persistencia (DB)
+    # Persistencia (DB)
     ingest_db(
         lagoon_id=lagoon_id,
         ts=ts,
@@ -40,14 +40,14 @@ async def ingest_scada(
         db=db,
     )
 
-    # 2️⃣ Estado en memoria (REALTIME)
+    # Estado en memoria (REALTIME)
     state.update(
         str(lagoon_id),
         ts.isoformat(),
         tags,
     )
 
-    # 3️⃣ Broadcast WebSocket
+    # WebSocket
     await ws.broadcast(
         str(lagoon_id),
         {
