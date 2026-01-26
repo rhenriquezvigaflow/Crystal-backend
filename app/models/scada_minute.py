@@ -1,0 +1,88 @@
+from sqlalchemy import (
+    Column,
+    DateTime,
+    String,
+    Float,
+    Boolean,
+    ForeignKey,
+    BigInteger,
+    UniqueConstraint,
+    Index,
+    func,
+)
+
+from app.models.base import Base
+
+
+class ScadaMinute(Base):
+    __tablename__ = "scada_minute"
+
+    # ID interno incremental (NO UUID)
+    id = Column(
+        BigInteger,
+        primary_key=True,
+        autoincrement=True,
+    )
+
+    # ID lógico de la laguna
+    lagoon_id = Column(
+        String(64),
+        ForeignKey("lagoons.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    tag_id = Column(
+        String(64),
+        nullable=False,
+        index=True,
+    )
+
+    # Timestamp truncado al minuto (UTC)
+    bucket_ts = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        index=True,
+    )
+
+    # Valores
+    value_num = Column(
+        Float,
+        nullable=True,
+    )
+
+    value_bool = Column(
+        Boolean,
+        nullable=True,
+    )
+
+    # Timestamps
+    created_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+    updated_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),   # ✅ IMPORTANTE
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "lagoon_id",
+            "tag_id",
+            "bucket_ts",
+            name="uq_scada_minute",
+        ),
+        Index(
+            "ix_scada_minute_lagoon_bucket",
+            "lagoon_id",
+            "bucket_ts",
+        ),
+    )
+
+
+
