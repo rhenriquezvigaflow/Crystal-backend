@@ -1,25 +1,36 @@
-from typing import Dict
-from datetime import datetime
-import asyncio
 
+from datetime import datetime
 
 class StateStore:
-    """
-    Estado SCADA en memoria:
-    lagoon_id -> { ts, tags }
-    """
-
     def __init__(self):
-        self._data: Dict[str, dict] = {}
-        self._lock = asyncio.Lock()
+        self.state = {}
+        self.last_end_ts = {}  # 👈 NUEVO
 
-    async def update(self, lagoon_id: str, ts: str, tags: dict):
-        async with self._lock:
-            self._data[lagoon_id] = {
-                "ts": ts,
-                "tags": tags,
-            }
+    def preload_last_end_ts(self, lagoon_id: str, data: dict):
+        self.last_end_ts[lagoon_id] = data
 
-    async def get(self, lagoon_id: str):
-        async with self._lock:
-            return self._data.get(lagoon_id)
+    def update(self, lagoon_id: str, tags: dict):
+        now = datetime.now().isoformat()
+        lagoon_state = self.state.setdefault(lagoon_id, {})
+
+        for tag, value in tags.items():
+            if isinstance(value, bool):
+                prev = lagoon_state.get(tag)
+
+                if not prev or prev["value"] != value:
+                    lagoon_state[tag] = {
+                        "value": value,
+                        "updated_at": now,
+                        "last_end_ts": (
+                            self.last_end_ts
+                            .get(lagoon_id, {})
+                            .get(tag)
+                        ),
+                    }
+            else:
+                lagoon_state[tag] = value
+
+    def snapshot(self, lagoon_id: str):
+        return {
+            "tags": self.state.get(lagoon_id, {})
+        }

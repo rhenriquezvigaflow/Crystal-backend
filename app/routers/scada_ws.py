@@ -10,9 +10,10 @@ async def scada_ws(
     manager=Depends(get_ws_manager),
     state=Depends(get_state_store),
 ):
+    await ws.accept()
     await manager.connect(lagoon_id, ws)
 
-    snapshot = state.get(str(lagoon_id)) if hasattr(state, "get") else None
+    snapshot = state.get_snapshot(str(lagoon_id))
     if snapshot:
         await ws.send_json({
             "type": "snapshot",

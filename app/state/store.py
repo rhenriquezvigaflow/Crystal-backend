@@ -1,29 +1,74 @@
-# app/state/store.py
-from collections import defaultdict, deque
-from typing import Any, Dict, Tuple
+from __future__ import annotations
 
-RING_SECONDS = 15
+from typing import Dict, Any
+
 
 class RealtimeStateStore:
     def __init__(self) -> None:
-        self.latest: Dict[str, Dict[str, Tuple[Any, str]]] = defaultdict(dict)
-        self.ring: Dict[str, deque] = defaultdict(lambda: deque(maxlen=RING_SECONDS))
+        self.tags: Dict[str, Dict[str, Any]] = {}
+        self.last_ts: Dict[str, str] = {}
 
-    def update(self, lagoon_id: str, ts: str, tags: Dict[str, Any]) -> None:
-        for tag_id, val in tags.items():
-            self.latest[lagoon_id][tag_id] = (val, ts)
+        # estado temporal
+        self.start_ts: Dict[str, str] = {}           
+        self.pump_last_on: Dict[str, Dict[str, str]] = {}
 
-        self.ring[lagoon_id].append({
-            "type": "tick",
-            "lagoon_id": lagoon_id,
-            "ts": ts,
-            "tags": tags,
-        })
+    # ==========================
+    # Preload desde BD (startup)
+    # ==========================
+    async def preload_last_start_ts(self, lagoon_id: str, ts: str | None):
+        if ts:
+            self.start_ts[lagoon_id] = ts
 
+    # ==========================
+    # Update por tick SCADA
+    # ==========================
+    async def update(self, lagoon_id: str, tags: dict, ts: str):
+        prev_tags = self.tags.get(lagoon_id, {})
+
+        self.tags.setdefault(lagoon_id, {})
+        self.pump_last_on.setdefault(lagoon_id, {})
+
+        for tag, value in tags.items():
+            if isinstance(value, bool):
+                prev = prev_tags.get(tag)
+
+                if value is True and (prev is False or prev is None):
+                    # última vez que ESTA bomba se encendió
+                    self.pump_last_on[lagoon_id][tag] = ts
+
+                    # último arranque a nivel laguna
+                    self.start_ts[lagoon_id] = ts
+
+        # persistir snapshot en memoria
+        self.tags[lagoon_id].update(tags)
+        self.last_ts[lagoon_id] = ts
+
+    # ==========================
+    # Snapshot inicial WS
+    # ==========================
     def snapshot(self, lagoon_id: str) -> dict:
-        tags = {k: v for k, (v, _) in self.latest.get(lagoon_id, {}).items()}
         return {
             "type": "snapshot",
             "lagoon_id": lagoon_id,
-            "tags": tags,
+            "ts": self.last_ts.get(lagoon_id),
+            "tags": self.tags.get(lagoon_id, {}),
+            "pump_last_on": self.pump_last_on.get(lagoon_id, {}),
+            "start_ts": {
+                lagoon_id: self.start_ts.get(lagoon_id)
+            },
+        }
+
+    # ==========================
+    # Tick WS
+    # ==========================
+    async def tick_payload(self, lagoon_id: str) -> dict:
+        return {
+            "type": "tick",
+            "lagoon_id": lagoon_id,
+            "ts": self.last_ts.get(lagoon_id),
+            "tags": self.tags.get(lagoon_id, {}),
+            "pump_last_on": self.pump_last_on.get(lagoon_id, {}),
+            "start_ts": {
+                lagoon_id: self.start_ts.get(lagoon_id)
+            },
         }

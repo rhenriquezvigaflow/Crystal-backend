@@ -1,30 +1,35 @@
 # app/ws/routes.py
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, Query
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 
 router = APIRouter()
-
-def get_state_store():
-    raise RuntimeError("StateStore dependency not wired")
-
-def get_ws_manager():
-    raise RuntimeError("WebSocketManager dependency not wired")
 
 
 @router.websocket("/ws/scada")
 async def ws_scada(
     websocket: WebSocket,
     lagoon_id: str = Query(...),
-    state = Depends(get_state_store),
-    ws = Depends(get_ws_manager),
 ):
-    client = await ws.connect(websocket, lagoon_id)
+    # 1️⃣ aceptar conexión (OBLIGATORIO antes de enviar)
+    await websocket.accept()
+
+    # 2️⃣ obtener singletons desde app.state
+    state = websocket.app.state.state_store
+    ws_manager = websocket.app.state.ws_manager
+
+    # 3️⃣ registrar conexión
+    await ws_manager.connect(lagoon_id, websocket)
 
     try:
-        await websocket.send_json(state.snapshot(lagoon_id))
+        # 4️⃣ enviar snapshot inicial (YA ES SEGURO)
+        snapshot = state.snapshot(lagoon_id)
+        await websocket.send_json(snapshot)
 
+        # 5️⃣ loop pasivo (cliente no envía nada)
         while True:
             await websocket.receive_text()
+
     except WebSocketDisconnect:
         pass
+
     finally:
-        await ws.disconnect(client)
+        await ws_manager.disconnect(lagoon_id, websocket)

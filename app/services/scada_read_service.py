@@ -1,5 +1,5 @@
 from sqlalchemy.orm import Session
-from repositories.scada_read_repository import ScadaReadRepository
+from app.repositories.scada_read_repository import ScadaReadRepository
 
 
 def build_tags(rows):

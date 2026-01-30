@@ -1,61 +1,78 @@
-from fastapi import APIRouter, Depends
-from sqlalchemy.orm import Session
+# app/routers/ingest.py
 
-from app.schemas.ingest import CollectorPayload
-from app.db.session import get_db
-from app.services.ingest_service import ingest as ingest_db
+from fastapi import APIRouter, Request
+from pydantic import BaseModel
+from datetime import datetime, timezone
+from dateutil.parser import isoparse
 
-from app.deps.realtime import get_state_store, get_ws_manager
-from app.security.api_key import verify_collector_key
-
+from app.db.session import SessionLocal
+from app.services.ingest_service import ingest
 
 router = APIRouter()
 
 
+class IngestPayload(BaseModel):
+    lagoon_id: str
+    ts: str | None = None
+    tags: dict
+
+
 @router.post("/ingest/scada")
 async def ingest_scada(
-    payload: CollectorPayload,
-    db: Session = Depends(get_db),
-    state = Depends(get_state_store),
-    ws = Depends(get_ws_manager),
-    _ = Depends(verify_collector_key),  
+    payload: IngestPayload,
+    request: Request,
 ):
-    """
-    Endpoint de ingest SCADA.
-    - Recibe datos normalizados del collector
-    - Persiste minuto + eventos
-    - Actualiza estado en memoria
-    - Emite tick por WebSocket
-    """
+    # servicios compartidos
+    state = request.app.state.state_store
+    ws = request.app.state.ws_manager
 
     lagoon_id = payload.lagoon_id
-    ts = payload.timestamp
-    tags = payload.tags
+    tags = payload.tags or {}
 
-    # Persistencia (DB)
-    ingest_db(
-        lagoon_id=lagoon_id,
-        ts=ts,
-        tags=tags,
-        db=db,
-    )
+    # ===============================
+    # 🕒 NORMALIZACIÓN DEFINITIVA DE TS
+    # ===============================
+    if payload.ts:
+        # string ISO → datetime
+        ts_dt = isoparse(payload.ts)
+        if ts_dt.tzinfo is None:
+            ts_dt = ts_dt.replace(tzinfo=timezone.utc)
+    else:
+        ts_dt = datetime.now(timezone.utc)
 
-    # Estado en memoria (REALTIME)
-    state.update(
-        str(lagoon_id),
-        ts.isoformat(),
-        tags,
-    )
+    # string solo para WS / state
+    ts_iso = ts_dt.isoformat()
 
-    # WebSocket
+    # ===============================
+    # 1️⃣ actualizar estado en memoria
+    # ===============================
+    await state.update(lagoon_id, tags, ts_iso)
+
+    # ===============================
+    # 2️⃣ persistir en base de datos
+    # ===============================
+    db = SessionLocal()
+    try:
+        ingest(
+            lagoon_id=lagoon_id,
+            ts=ts_dt,      # ✅ datetime con tzinfo
+            tags=tags,
+            db=db,
+        )
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        print("[INGEST DB ERROR]", e)
+        raise
+    finally:
+        db.close()
+
+    # ===============================
+    # 3️⃣ broadcast websocket
+    # ===============================
     await ws.broadcast(
-        str(lagoon_id),
-        {
-            "type": "tick",
-            "lagoon_id": str(lagoon_id),
-            "ts": ts.isoformat().replace("+00:00", "Z"),
-            "tags": tags,
-        },
+        lagoon_id,
+        await state.tick_payload(lagoon_id),
     )
 
-    return {"status": "ok"}
+    return {"ok": True}

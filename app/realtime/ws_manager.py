@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Dict, Set
 from fastapi import WebSocket
 import asyncio
@@ -21,12 +22,13 @@ class WebSocketManager:
                 if not self._connections[lagoon_id]:
                     self._connections.pop(lagoon_id)
 
-    async def broadcast(self, lagoon_id: str, message: dict):
-        async with self._lock:
-            conns = list(self._connections.get(lagoon_id, []))
+    async def broadcast(self, lagoon_id: str, tags: dict):
+        payload = {
+            "type": "tick",
+            "lagoon_id": lagoon_id,
+            "tags": tags,
+            "ts": datetime.now().isoformat()
+        }
 
-        for ws in conns:
-            try:
-                await ws.send_json(message)
-            except Exception:
-                await self.disconnect(lagoon_id, ws)
+        for ws in self.active_connections.get(lagoon_id, []):
+            await ws.send_json(payload)
