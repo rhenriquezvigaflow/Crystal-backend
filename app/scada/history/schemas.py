@@ -5,7 +5,7 @@ from pydantic import BaseModel
 
 class HistoryPoint(BaseModel):
     timestamp: datetime
-    value: float
+    value: Optional[float] = None  # permite null
 
 
 class HistorySeries(BaseModel):
@@ -16,7 +16,8 @@ class HistorySeries(BaseModel):
     points: List[HistoryPoint]
 
 
-class HistoryHourlyResponse(BaseModel):
+class HistoryResponse(BaseModel):
     lagoon_id: str
-    resolution: str = "1h"
+    resolution: str              # "1h" | "1d" | "1w"
+    source: str                  # "view" | "table"
     series: List[HistorySeries]

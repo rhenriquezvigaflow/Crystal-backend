@@ -13,13 +13,13 @@ def build_tags(rows):
 
 
 def get_last_minute(lagoon_id: str, db: Session):
-    bucket_ts, rows = ScadaReadRepository.get_last_minute(db, lagoon_id)
+    bucket, rows = ScadaReadRepository.get_last_minute(db, lagoon_id)
     if not rows:
         return None
 
     return {
         "lagoon_id": lagoon_id,
-        "ts": bucket_ts,
+        "ts": bucket,
         "tags": build_tags(rows),
     }
 
@@ -29,7 +29,7 @@ def get_current(lagoon_id: str, db: Session):
     if not rows:
         return None
 
-    ts = max(r.bucket_ts for r in rows)
+    ts = max(r.bucket for r in rows)
 
     return {
         "lagoon_id": lagoon_id,

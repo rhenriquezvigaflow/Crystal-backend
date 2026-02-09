@@ -102,7 +102,7 @@ def ingest(
         ]
 
         for fk in flush_keys:
-            lagoon_id_fk, bucket_ts = fk
+            lagoon_id_fk, bucket = fk
             tag_dict = _minute_buffer.pop(fk, {})
 
             for tag_id, values in tag_dict.items():
@@ -119,13 +119,13 @@ def ingest(
                 stmt = insert(ScadaMinute).values(
                     lagoon_id=lagoon_id_fk,
                     tag_id=tag_id,
-                    bucket_ts=bucket_ts,
+                    bucket=bucket,
                     value_num=value_num,
                     value_bool=value_bool,
                 )
 
                 stmt = stmt.on_conflict_do_update(
-                    constraint="uq_scada_minute",
+                    index_elements=["lagoon_id", "tag_id", "bucket"],
                     set_={
                         "value_num": stmt.excluded.value_num,
                         "value_bool": stmt.excluded.value_bool,
@@ -136,7 +136,7 @@ def ingest(
                 db.execute(stmt)
 
             logger.info(
-                f"FLUSH lagoon={lagoon_id_fk} bucket={bucket_ts.isoformat()}"
+                f"FLUSH lagoon={lagoon_id_fk} bucket={bucket.isoformat()}"
             )
 
         if flush_keys:

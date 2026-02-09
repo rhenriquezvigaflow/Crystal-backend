@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 from typing import Dict, Any
 
 
@@ -8,20 +7,13 @@ class RealtimeStateStore:
         self.tags: Dict[str, Dict[str, Any]] = {}
         self.last_ts: Dict[str, str] = {}
 
-        # estado temporal
-        self.start_ts: Dict[str, str] = {}           
+        self.start_ts: Dict[str, str] = {}
         self.pump_last_on: Dict[str, Dict[str, str]] = {}
 
-    # ==========================
-    # Preload desde BD (startup)
-    # ==========================
     async def preload_last_start_ts(self, lagoon_id: str, ts: str | None):
         if ts:
             self.start_ts[lagoon_id] = ts
 
-    # ==========================
-    # Update por tick SCADA
-    # ==========================
     async def update(self, lagoon_id: str, tags: dict, ts: str):
         prev_tags = self.tags.get(lagoon_id, {})
 
@@ -33,19 +25,12 @@ class RealtimeStateStore:
                 prev = prev_tags.get(tag)
 
                 if value is True and (prev is False or prev is None):
-                    # última vez que ESTA bomba se encendió
                     self.pump_last_on[lagoon_id][tag] = ts
-
-                    # último arranque a nivel laguna
                     self.start_ts[lagoon_id] = ts
 
-        # persistir snapshot en memoria
         self.tags[lagoon_id].update(tags)
         self.last_ts[lagoon_id] = ts
 
-    # ==========================
-    # Snapshot inicial WS
-    # ==========================
     def snapshot(self, lagoon_id: str) -> dict:
         return {
             "type": "snapshot",
@@ -53,14 +38,9 @@ class RealtimeStateStore:
             "ts": self.last_ts.get(lagoon_id),
             "tags": self.tags.get(lagoon_id, {}),
             "pump_last_on": self.pump_last_on.get(lagoon_id, {}),
-            "start_ts": {
-                lagoon_id: self.start_ts.get(lagoon_id)
-            },
+            "start_ts": {lagoon_id: self.start_ts.get(lagoon_id)},
         }
 
-    # ==========================
-    # Tick WS
-    # ==========================
     async def tick_payload(self, lagoon_id: str) -> dict:
         return {
             "type": "tick",
@@ -68,7 +48,5 @@ class RealtimeStateStore:
             "ts": self.last_ts.get(lagoon_id),
             "tags": self.tags.get(lagoon_id, {}),
             "pump_last_on": self.pump_last_on.get(lagoon_id, {}),
-            "start_ts": {
-                lagoon_id: self.start_ts.get(lagoon_id)
-            },
+            "start_ts": {lagoon_id: self.start_ts.get(lagoon_id)},
         }

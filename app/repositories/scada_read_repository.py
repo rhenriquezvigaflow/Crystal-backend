@@ -8,7 +8,7 @@ class ScadaReadRepository:
     @staticmethod
     def get_last_minute(db: Session, lagoon_id: str):
         last_bucket = (
-            db.query(func.max(ScadaMinute.bucket_ts))
+            db.query(func.max(ScadaMinute.bucket))
             .filter(ScadaMinute.lagoon_id == lagoon_id)
             .scalar()
         )
@@ -20,7 +20,7 @@ class ScadaReadRepository:
             db.query(ScadaMinute)
             .filter(
                 ScadaMinute.lagoon_id == lagoon_id,
-                ScadaMinute.bucket_ts == last_bucket,
+                ScadaMinute.bucket == last_bucket,
             )
             .all()
         )
@@ -35,7 +35,7 @@ class ScadaReadRepository:
             .filter(ScadaMinute.lagoon_id == lagoon_id)
             .order_by(
                 ScadaMinute.tag_id,
-                ScadaMinute.bucket_ts.desc(),
+                ScadaMinute.bucket.desc(),
             )
             .all()
         )

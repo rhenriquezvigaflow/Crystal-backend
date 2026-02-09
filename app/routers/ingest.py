@@ -29,9 +29,7 @@ async def ingest_scada(
     lagoon_id = payload.lagoon_id
     tags = payload.tags or {}
 
-    # ===============================
-    # 🕒 NORMALIZACIÓN DEFINITIVA DE TS
-    # ===============================
+
     if payload.ts:
         # string ISO → datetime
         ts_dt = isoparse(payload.ts)
@@ -43,14 +41,10 @@ async def ingest_scada(
     # string solo para WS / state
     ts_iso = ts_dt.isoformat()
 
-    # ===============================
-    # 1️⃣ actualizar estado en memoria
-    # ===============================
+
     await state.update(lagoon_id, tags, ts_iso)
 
-    # ===============================
-    # 2️⃣ persistir en base de datos
-    # ===============================
+
     db = SessionLocal()
     try:
         ingest(
@@ -67,9 +61,7 @@ async def ingest_scada(
     finally:
         db.close()
 
-    # ===============================
-    # 3️⃣ broadcast websocket
-    # ===============================
+
     await ws.broadcast(
         lagoon_id,
         await state.tick_payload(lagoon_id),

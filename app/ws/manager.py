@@ -1,4 +1,3 @@
-# app/ws/manager.py
 from __future__ import annotations
 
 import asyncio
@@ -14,7 +13,6 @@ class WebSocketManager:
         self._connections: DefaultDict[str, Set[WebSocket]] = defaultdict(set)
 
     async def connect(self, lagoon_id: str, websocket: WebSocket) -> None:
-        # ❌ NO websocket.accept() aquí
         async with self._lock:
             self._connections[lagoon_id].add(websocket)
 

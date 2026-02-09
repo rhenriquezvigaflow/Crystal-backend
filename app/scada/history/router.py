@@ -1,14 +1,16 @@
-# app/scada/history/router.py
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from datetime import datetime
 from typing import List, Optional, Dict
 
 from app.db.session import SessionLocal
-from .repo import get_hourly_history
-from .schemas import HistoryHourlyResponse, HistorySeries, HistoryPoint
+from app.scada.history.repo import get_history_rows
 
-router = APIRouter(prefix="/scada/history", tags=["SCADA History"])
+
+router = APIRouter(
+    prefix="/scada/history",
+    tags=["SCADA History"],
+)
 
 
 def get_db():
@@ -19,52 +21,39 @@ def get_db():
         db.close()
 
 
-@router.get("/hourly", response_model=HistoryHourlyResponse)
-def get_history_hourly(
+@router.get("/{resolution}")
+def get_history(
+    resolution: str,  # hourly | daily | weekly (informativo)
     lagoon_id: str = Query(...),
     start_date: datetime = Query(...),
     end_date: datetime = Query(...),
     tags: Optional[List[str]] = Query(None),
     db: Session = Depends(get_db),
 ):
-    rows = get_hourly_history(
+    data = get_history_rows(
         db=db,
         lagoon_id=lagoon_id,
         start_date=start_date,
         end_date=end_date,
+        resolution=resolution,
         tags=tags,
     )
 
-    series_map: Dict[str, HistorySeries] = {}
+    series_map: Dict[str, list] = {}
 
-    for r in rows:
-        tag = r.tag_id
+    for r in data["rows"]:
+        tag = r["tag_id"]
+        series_map.setdefault(tag, []).append({
+            "timestamp": r["bucket"],
+            "value": float(r["avg_val"]) if r["avg_val"] is not None else None,
+        })
 
-        if tag not in series_map:
-            # ⚠️ metadata mínima (como IDA)
-            series_map[tag] = HistorySeries(
-                tag_key=tag,
-                name=tag,        # luego puedes mapear a nombre humano
-                unit=None,
-                decimals=2,
-                points=[],
-            )
-
-        if r.value_num is not None:
-            value = float(r.value_num)
-        elif r.value_bool is not None:
-            value = 1.0 if r.value_bool else 0.0
-        else:
-            continue
-
-        series_map[tag].points.append(
-            HistoryPoint(
-                timestamp=r.bucket_ts,
-                value=round(value, series_map[tag].decimals),
-            )
-        )
-
-    return HistoryHourlyResponse(
-        lagoon_id=lagoon_id,
-        series=list(series_map.values()),
-    )
+    return {
+        "lagoon_id": lagoon_id,
+        "resolution": data["resolution"],
+        "source": data["source"],
+        "series": [
+            {"tag": tag, "points": points}
+            for tag, points in series_map.items()
+        ],
+    }

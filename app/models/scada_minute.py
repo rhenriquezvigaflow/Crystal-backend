@@ -39,7 +39,7 @@ class ScadaMinute(Base):
     )
 
     # Timestamp truncado al minuto (UTC)
-    bucket_ts = Column(
+    bucket = Column(
         DateTime(timezone=True),
         nullable=False,
         index=True,
@@ -74,13 +74,13 @@ class ScadaMinute(Base):
         UniqueConstraint(
             "lagoon_id",
             "tag_id",
-            "bucket_ts",
+            "bucket",
             name="uq_scada_minute",
         ),
         Index(
             "ix_scada_minute_lagoon_bucket",
             "lagoon_id",
-            "bucket_ts",
+            "bucket",
         ),
     )
 
