@@ -1,9 +1,7 @@
-# app/routers/ingest.py
-
 from fastapi import APIRouter, Request
 from pydantic import BaseModel
 from datetime import datetime, timezone
-from dateutil.parser import isoparse
+from typing import Optional
 
 from app.db.session import SessionLocal
 from app.services.ingest_service import ingest
@@ -13,7 +11,7 @@ router = APIRouter()
 
 class IngestPayload(BaseModel):
     lagoon_id: str
-    ts: str | None = None
+    timestamp: Optional[datetime] = None
     tags: dict
 
 
@@ -22,34 +20,28 @@ async def ingest_scada(
     payload: IngestPayload,
     request: Request,
 ):
-    # servicios compartidos
     state = request.app.state.state_store
     ws = request.app.state.ws_manager
 
     lagoon_id = payload.lagoon_id
     tags = payload.tags or {}
 
-
-    if payload.ts:
-        # string ISO → datetime
-        ts_dt = isoparse(payload.ts)
+    # ===== UTC timestamp =====
+    if payload.timestamp:
+        ts_dt = payload.timestamp
         if ts_dt.tzinfo is None:
             ts_dt = ts_dt.replace(tzinfo=timezone.utc)
     else:
         ts_dt = datetime.now(timezone.utc)
 
-    # string solo para WS / state
     ts_iso = ts_dt.isoformat()
 
-
-    await state.update(lagoon_id, tags, ts_iso)
-
-
+    # ===== DB + EVENT DETECTION =====
     db = SessionLocal()
     try:
-        ingest(
+        pump_last_on_updates = ingest(
             lagoon_id=lagoon_id,
-            ts=ts_dt,      # ✅ datetime con tzinfo
+            ts=ts_dt,
             tags=tags,
             db=db,
         )
@@ -61,7 +53,15 @@ async def ingest_scada(
     finally:
         db.close()
 
+    # ===== REALTIME =====
+    await state.update(
+        lagoon_id=lagoon_id,
+        tags=tags,
+        ts=ts_iso,
+        pump_last_on_updates=pump_last_on_updates,
+    )
 
+    # ===== WS =====
     await ws.broadcast(
         lagoon_id,
         await state.tick_payload(lagoon_id),

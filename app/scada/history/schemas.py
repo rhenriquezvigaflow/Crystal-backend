@@ -5,7 +5,7 @@ from pydantic import BaseModel
 
 class HistoryPoint(BaseModel):
     timestamp: datetime
-    value: Optional[float] = None  # permite null
+    value: Optional[float] = None  
 
 
 class HistorySeries(BaseModel):

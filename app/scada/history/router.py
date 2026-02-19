@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from datetime import datetime
 from typing import List, Optional, Dict
 
-from app.db.session import SessionLocal
+from app.db.session import get_db
 from app.scada.history.repo import get_history_rows
 
 
@@ -12,18 +12,9 @@ router = APIRouter(
     tags=["SCADA History"],
 )
 
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-
 @router.get("/{resolution}")
 def get_history(
-    resolution: str,  # hourly | daily | weekly (informativo)
+    resolution: str,  # hourly | daily | weekly 
     lagoon_id: str = Query(...),
     start_date: datetime = Query(...),
     end_date: datetime = Query(...),

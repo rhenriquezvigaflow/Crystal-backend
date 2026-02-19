@@ -1,4 +1,3 @@
-# app/deps/realtime.py
 from fastapi import Request
 
 def get_state_store(request: Request):

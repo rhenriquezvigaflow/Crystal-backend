@@ -33,7 +33,6 @@ def table_exists(db: Session, qualified_name: str) -> bool:
     return bool(row and row["oid"])
 
 
-# 🔹 REGLA DE NEGOCIO DEFINITIVA
 def pick_resolution_by_days(days: float) -> ResolutionChoice:
     if days <= 7:
         return RESOLUTIONS[0]   # hourly

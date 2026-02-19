@@ -2,13 +2,16 @@ from sqlalchemy import (
     Column,
     DateTime,
     String,
+    Text,
     Float,
     Boolean,
     ForeignKey,
     BigInteger,
+    Integer,
     UniqueConstraint,
     Index,
     func,
+    Date,                     # NUEVO
 )
 
 from app.models.base import Base
@@ -17,14 +20,12 @@ from app.models.base import Base
 class ScadaMinute(Base):
     __tablename__ = "scada_minute"
 
-    # ID interno incremental (NO UUID)
     id = Column(
         BigInteger,
         primary_key=True,
         autoincrement=True,
     )
 
-    # ID lógico de la laguna
     lagoon_id = Column(
         String(64),
         ForeignKey("lagoons.id", ondelete="CASCADE"),
@@ -45,7 +46,16 @@ class ScadaMinute(Base):
         index=True,
     )
 
+    # =========================
     # Valores
+    # =========================
+
+    state = Column(
+        Integer,
+        nullable=True,
+        index=True,
+    )
+
     value_num = Column(
         Float,
         nullable=True,
@@ -56,7 +66,10 @@ class ScadaMinute(Base):
         nullable=True,
     )
 
+    # =========================
     # Timestamps
+    # =========================
+
     created_at = Column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -65,7 +78,7 @@ class ScadaMinute(Base):
 
     updated_at = Column(
         DateTime(timezone=True),
-        server_default=func.now(),   # ✅ IMPORTANTE
+        server_default=func.now(),
         onupdate=func.now(),
         nullable=False,
     )
@@ -82,7 +95,5 @@ class ScadaMinute(Base):
             "lagoon_id",
             "bucket",
         ),
+
     )
-
-
-

@@ -1,6 +1,6 @@
-import app.models 
-from contextlib import asynccontextmanager
+import app.models
 
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -13,34 +13,58 @@ from app.ws.manager import WebSocketManager
 from app.persist.worker import PersistWorker
 from app.db.session import SessionLocal
 from app.repositories.scada_event_repository import ScadaEventRepository
+from app.models.scada_event import ScadaEvent
+from app.services.ingest_service import initialize_last_state
 
+
+# ======================================================
+# Lifespan
+# ======================================================
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # ==========================
-    # Singletons
-    # ==========================
-    app.state.state_store = RealtimeStateStore()
-    app.state.ws_manager = WebSocketManager()  # ← CORREGIDO
 
-    # ==========================
-    # Preload desde BD
-    # ==========================
+
+    app.state.state_store = RealtimeStateStore()
+    app.state.ws_manager = WebSocketManager()
+
     db = SessionLocal()
+
     try:
-        lagoon_id = "costa_del_lago"
-        last_start_by_pump = (
-            ScadaEventRepository.get_last_start_ts_by_lagoon(db, lagoon_id)
+        lagoon_ids = (
+            db.query(ScadaEvent.lagoon_id)
+            .distinct()
+            .all()
         )
-        if last_start_by_pump:
-            app.state.state_store.pump_last_on[lagoon_id] = last_start_by_pump
-        print("[BOOT] pump_last_on precargado:", last_start_by_pump)
+
+        lagoon_ids = [row[0] for row in lagoon_ids]
+
+        print(f"[BOOT] Lagunas detectadas en eventos: {lagoon_ids}")
+
+        for lagoon_id in lagoon_ids:
+
+            last_times = (
+                ScadaEventRepository.get_last_event_time_by_lagoon(db, lagoon_id)
+            )
+
+            if last_times:
+                for tag_id, ts in last_times.items():
+                    app.state.state_store.set_pump_last_on(
+                        lagoon_id=lagoon_id,
+                        tag_id=tag_id,
+                        ts=ts
+                    )
+
+                print(
+                    f"[BOOT] pump_last_on inicializado → "
+                    f"{lagoon_id} ({len(last_times)} tags)"
+                )
+            else:
+                print(f"[BOOT] sin estados previos → {lagoon_id}")
+
     finally:
         db.close()
 
-    # ==========================
-    # Persist worker
-    # ==========================
     app.state.persist_worker = PersistWorker()
     await app.state.persist_worker.start()
     print("[BOOT] PersistWorker iniciado")
@@ -50,19 +74,14 @@ async def lifespan(app: FastAPI):
     await app.state.persist_worker.stop()
     print("[BOOT] PersistWorker detenido")
 
-
 app = FastAPI(lifespan=lifespan)
 
-# ======================================================
-# Routers
-# ======================================================
+
 app.include_router(ingest_router)
 app.include_router(ws_router)
 app.include_router(scada_history_router)
 
-# ======================================================
-# CORS
-# ======================================================
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[

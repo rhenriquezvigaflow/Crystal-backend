@@ -4,7 +4,7 @@ from datetime import datetime
 class StateStore:
     def __init__(self):
         self.state = {}
-        self.last_end_ts = {}  # 👈 NUEVO
+        self.last_end_ts = {}  
 
     def preload_last_end_ts(self, lagoon_id: str, data: dict):
         self.last_end_ts[lagoon_id] = data
