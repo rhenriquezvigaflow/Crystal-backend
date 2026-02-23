@@ -1,4 +1,5 @@
 import app.models
+import app.auth.model
 
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -12,18 +13,17 @@ from app.state.store import RealtimeStateStore
 from app.ws.manager import WebSocketManager
 from app.persist.worker import PersistWorker
 from app.db.session import SessionLocal
+from app.monitor.scada_watchdog import ScadaStallWatchdog
 from app.repositories.scada_event_repository import ScadaEventRepository
 from app.models.scada_event import ScadaEvent
 from app.services.ingest_service import initialize_last_state
 
+from app.auth.auth import router as auth_router
 
-# ======================================================
-# Lifespan
-# ======================================================
+from app.models.lagoon import Lagoon
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-
 
     app.state.state_store = RealtimeStateStore()
     app.state.ws_manager = WebSocketManager()
@@ -31,6 +31,22 @@ async def lifespan(app: FastAPI):
     db = SessionLocal()
 
     try:
+        # =====================================================
+        # Cargar timezones desde tabla lagoons
+        # =====================================================
+        lagoons = db.query(Lagoon).all()
+
+        for lagoon in lagoons:
+            app.state.state_store.set_lagoon_timezone(
+                lagoon_id=lagoon.id,
+                timezone_str=lagoon.timezone,
+            )
+
+        print(f"[BOOT] Timezones cargadas: {len(lagoons)}")
+
+        # =====================================================
+        #  Detectar lagunas con eventos
+        # =====================================================
         lagoon_ids = (
             db.query(ScadaEvent.lagoon_id)
             .distinct()
@@ -41,6 +57,9 @@ async def lifespan(app: FastAPI):
 
         print(f"[BOOT] Lagunas detectadas en eventos: {lagoon_ids}")
 
+        # =====================================================
+        #  Precargar último start_ts por bomba
+        # =====================================================
         for lagoon_id in lagoon_ids:
 
             last_times = (
@@ -65,14 +84,16 @@ async def lifespan(app: FastAPI):
     finally:
         db.close()
 
-    app.state.persist_worker = PersistWorker()
-    await app.state.persist_worker.start()
-    print("[BOOT] PersistWorker iniciado")
+    app.state.scada_watchdog = ScadaStallWatchdog()
+    await app.state.scada_watchdog.start()
 
-    yield
+    try:
+        yield
+    finally:
+        await app.state.scada_watchdog.stop()
 
-    await app.state.persist_worker.stop()
-    print("[BOOT] PersistWorker detenido")
+
+
 
 app = FastAPI(lifespan=lifespan)
 
@@ -80,6 +101,7 @@ app = FastAPI(lifespan=lifespan)
 app.include_router(ingest_router)
 app.include_router(ws_router)
 app.include_router(scada_history_router)
+app.include_router(auth_router)
 
 
 app.add_middleware(

@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Request
+import asyncio
+import os
+from fastapi import APIRouter, Request, HTTPException
 from pydantic import BaseModel
 from datetime import datetime, timezone
 from typing import Optional
@@ -7,12 +9,31 @@ from app.db.session import SessionLocal
 from app.services.ingest_service import ingest
 
 router = APIRouter()
+INGEST_TIMEOUT_SEC = float(os.getenv("INGEST_TIMEOUT_SEC", "125"))
 
 
 class IngestPayload(BaseModel):
     lagoon_id: str
     timestamp: Optional[datetime] = None
     tags: dict
+
+
+def _persist_ingest(lagoon_id: str, ts_dt: datetime, tags: dict):
+    db = SessionLocal()
+    try:
+        pump_last_on_updates = ingest(
+            lagoon_id=lagoon_id,
+            ts=ts_dt,
+            tags=tags,
+            db=db,
+        )
+        db.commit()
+        return pump_last_on_updates
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
 
 
 @router.post("/ingest/scada")
@@ -36,22 +57,28 @@ async def ingest_scada(
 
     ts_iso = ts_dt.isoformat()
 
-    # ===== DB + EVENT DETECTION =====
-    db = SessionLocal()
     try:
-        pump_last_on_updates = ingest(
-            lagoon_id=lagoon_id,
-            ts=ts_dt,
-            tags=tags,
-            db=db,
+        pump_last_on_updates = await asyncio.wait_for(
+            asyncio.to_thread(
+                _persist_ingest,
+                lagoon_id,
+                ts_dt,
+                tags,
+            ),
+            timeout=INGEST_TIMEOUT_SEC,
         )
-        db.commit()
+    except asyncio.TimeoutError:
+        print(
+            f"[INGEST TIMEOUT] lagoon={lagoon_id} "
+            f"timeout={INGEST_TIMEOUT_SEC}s"
+        )
+        raise HTTPException(
+            status_code=504,
+            detail="Ingest timeout",
+        )
     except Exception as e:
-        db.rollback()
         print("[INGEST DB ERROR]", e)
         raise
-    finally:
-        db.close()
 
     # ===== REALTIME =====
     await state.update(

@@ -33,6 +33,33 @@ def _bucket_minute(ts: datetime) -> datetime:
     return ts.replace(second=0, microsecond=0)
 
 
+def reset_runtime_state(
+    reason: str = "manual",
+    lock_timeout_sec: float = 1.0,
+) -> bool:
+    acquired = _lock.acquire(timeout=lock_timeout_sec)
+    if not acquired:
+        print(
+            f"[INGEST RESET SKIPPED] reason={reason} "
+            "lock busy"
+        )
+        return False
+
+    try:
+        minute_keys = len(_minute_buffer)
+        state_keys = len(_last_state)
+        _minute_buffer.clear()
+        _last_state.clear()
+        print(
+            f"[INGEST RESET] reason={reason} "
+            f"cleared minute_buffer={minute_keys} "
+            f"last_state={state_keys}"
+        )
+        return True
+    finally:
+        _lock.release()
+
+
 def ingest(
     lagoon_id: str,
     ts: datetime,

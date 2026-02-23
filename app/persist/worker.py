@@ -22,7 +22,11 @@ class PersistWorker:
 
     async def _run(self):
         while not self._stop.is_set():
-            tick = await persist_queue.get()
+            try:
+                tick = await persist_queue.get()
+            except asyncio.CancelledError:
+                break
+
             db = SessionLocal()
             try:
                 ingest(
@@ -31,7 +35,9 @@ class PersistWorker:
                     tags=tick.tags,
                     db=db,
                 )
+                db.commit()
             except Exception:
                 db.rollback()
             finally:
                 db.close()
+                persist_queue.task_done()
