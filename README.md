@@ -2,14 +2,19 @@
 
 API backend para la gestión y procesamiento de datos SCADA (Supervisory Control and Data Acquisition) en tiempo real desde múltiples lagunas de tratamiento de agua.
 
-**Última actualización:** Febrero 2026 | **Versión:** 1.0
-
+**Ultima actualizacion:** Febrero 25, 2026 | **Version:** 1.1
 ## 🚀 Características Principales
 
 - **Ingesta de datos SCADA**: Recibe telemetría desde sistemas SCADA (Rockwell, Siemens, etc.)
 - **Almacenamiento eficiente**: Datos agregados por minuto en PostgreSQL
 - **Rastreo de eventos**: Monitoreo de eventos booleanos con timestamps de inicio/fin
 - **WebSocket en tiempo real**: Transmisión de datos y estado en vivo a clientes conectados
+- **Lectura rápida de estado**: Endpoints `/scada/{lagoon_id}/current` y `/scada/{lagoon_id}/last-minute`
+- **Eventos de bombas (ultimos 3)**: Endpoint `/scada/{lagoon_id}/pump-events/last-3`
+- **Consultas historicas**: `/scada/history/{resolution}` (hourly/daily/weekly)
+- **Agregados continuos**: Script SQL versionado para vistas `hourly/daily/weekly`
+- **Carga de zonas horarias**: Durante el arranque la aplicación inicializa timezones desde la tabla `lagoons` para normalizar timestamps
+- **Watchdog SCADA**: Servicio que vigila stall/caídas en el flujo de datos
 - **Cola de persistencia**: Worker asincrónico para garantizar persistencia de datos
 - **API REST robusta**: Endpoints documentados con Swagger/OpenAPI
 
@@ -23,7 +28,6 @@ API backend para la gestión y procesamiento de datos SCADA (Supervisory Control
 |-----------|--------|-------------|
 | **[INDEX.md](docs/INDEX.md)** | 5 min | 🗺️ Mapa maestro de toda la documentación |
 | **[ONE_PAGE_SUMMARY.md](docs/ONE_PAGE_SUMMARY.md)** | 5 min | 🎯 Resumen ejecutivo en 1 página |
-| **[QUICK_REFERENCE.md](docs/QUICK_REFERENCE.md)** | 5-10 min | ⚡ Referencia rápida y comandos |
 | **[ARQUITECTURA_Y_FLUJO.md](docs/ARQUITECTURA_Y_FLUJO.md)** | 20-30 min | 📐 Arquitectura completa y flujos |
 | **[GUIA_TECNICA_DESARROLLO.md](docs/GUIA_TECNICA_DESARROLLO.md)** | 45-60 min | 💻 Guía práctica con código |
 | **[DIAGRAMAS_FLUJOS.md](docs/DIAGRAMAS_FLUJOS.md)** | 15-20 min | 📊 Diagramas ASCII detallados |
@@ -33,7 +37,7 @@ API backend para la gestión y procesamiento de datos SCADA (Supervisory Control
 
 - ** Nuevo en el proyecto** → [ONBOARDING.md](docs/ONBOARDING.md) (guía paso a paso)
 - ** Desarrollador** → [ARQUITECTURA_Y_FLUJO.md](docs/ARQUITECTURA_Y_FLUJO.md) + [GUIA_TECNICA_DESARROLLO.md](docs/GUIA_TECNICA_DESARROLLO.md)
-- ** Setup rápido** → [QUICK_REFERENCE.md](docs/QUICK_REFERENCE.md)
+- ** Setup rápido** → leer secciones "Empieza por aquí" en [ARQUITECTURA_Y_FLUJO.md](docs/ARQUITECTURA_Y_FLUJO.md)
 - ** Arquitecto/PM** → [ONE_PAGE_SUMMARY.md](docs/ONE_PAGE_SUMMARY.md) + [DIAGRAMAS_FLUJOS.md](docs/DIAGRAMAS_FLUJOS.md)
 
 ## 📋 Requisitos Previos
@@ -75,6 +79,9 @@ psql -c "SELECT 1"
 
 # Crear BD (si no existe)
 psql -c "CREATE DATABASE crystal_lagoons;"
+
+# Crear continuous aggregates para histórico (hourly/daily/weekly)
+psql "$DATABASE_URL" -f scripts/sql/create_scada_continuous_aggregates.sql
 ```
 
 ### 3. Ejecutar Servidor
@@ -121,10 +128,28 @@ POST /ingest/scada
 # Respuesta: {"ok": true}
 ```
 
+### Consultas de Lectura
+```bash
+GET /scada/{lagoon_id}/current       # estado en memoria más reciente
+GET /scada/{lagoon_id}/last-minute   # agregación por minuto
+```
+
+### Historial SCADA
+```bash
+GET /scada/history/hourly?lagoon_id=laguna_1&start_date=2026-02-01&end_date=2026-02-07
+# devuelve series por tag según resolución (hourly|daily|weekly)
+```
+
+### Eventos de bombas (ultimos 3)
+```bash
+GET /scada/{lagoon_id}/pump-events/last-3
+```
+
 ### WebSocket - Real-time
 ```
 WS /ws/scada?lagoon_id=laguna_1
-# Conexión bidireccional para recibir actualizaciones en vivo
+# Ejemplo: ws://localhost:8000/ws/scada?lagoon_id=laguna_1
+# Conexión bidireccional para recibir snapshot inicial y ticks en vivo
 ```
 
 Para más detalles: [Sistema WebSocket](docs/ARQUITECTURA_Y_FLUJO.md#-sistema-websocket-real-time)
@@ -139,16 +164,19 @@ Para más detalles: [Sistema WebSocket](docs/ARQUITECTURA_Y_FLUJO.md#-sistema-we
 SCADA Device 
     ↓ POST /ingest/scada
 FastAPI Application
+    ├─ Timezone Loader (carga zonas horarias desde `lagoons`)
     ├─ RealtimeStateStore (Estado en memoria)
-    ├─ IngestService (Lógica de datos)
-    └─ WebSocketManager (Conexiones bidireccionales)
+    ├─ Watchdog SCADA (detecta stalls y reinicios)
+    ├─ IngestService (Lógica de datos: buffering, eventos, persistencia)
+    ├─ WebSocketManager (Conexiones bidireccionales)
+    └─ PersistWorker (cola de escritura en segundo plano)
     ↓
 PostgreSQL Database
     ├─ scada_event (Eventos de bombas)
     └─ scada_minute (Histórico agregado)
     ↓
 Frontend (React/Vue)
-    ├─ HTTP REST
+    ├─ HTTP REST (ingest / reads / history)
     └─ WebSocket real-time
 ```
 
@@ -184,7 +212,7 @@ crystal-backend/
 │   └── __pycache__/
 ├── docs/                       # 📚 DOCUMENTACIÓN COMPLETA
 │   ├── INDEX.md               # Mapa maestro
-│   ├── QUICK_REFERENCE.md     # Referencia rápida
+│   ├── (antes QUICK_REFERENCE.md)    # archivo retirado - usar ARQUITECTURA_Y_FLUJO
 │   ├── ARQUITECTURA_Y_FLUJO.md # Documentación completa
 │   ├── GUIA_TECNICA_DESARROLLO.md # Guía con código
 │   ├── DIAGRAMAS_FLUJOS.md    # Diagramas ASCII
@@ -277,7 +305,7 @@ pytest tests/ --cov=app --cov-report=html
 | `WebSocket connection failed` | Verificar CORS en main.py |
 | `No se guardan datos` | Verificar `db.commit()` en el código |
 
-**Troubleshooting completo:** [QUICK_REFERENCE.md](docs/QUICK_REFERENCE.md#-troubleshooting-rápido) o [GUIA_TECNICA_DESARROLLO.md](docs/GUIA_TECNICA_DESARROLLO.md#-troubleshooting)
+**Troubleshooting completo:** revisar [ARQUITECTURA_Y_FLUJO.md](docs/ARQUITECTURA_Y_FLUJO.md#-endpoints-http) o [GUIA_TECNICA_DESARROLLO.md](docs/GUIA_TECNICA_DESARROLLO.md#-troubleshooting)
 
 ## 🚀 Performance & Escalabilidad
 
@@ -348,7 +376,7 @@ Para contribuir al proyecto:
 - **Nuevo en el proyecto:** [ONBOARDING.md](docs/ONBOARDING.md) (guía paso a paso - 4-6 horas)
 - **Entender arquitecura:** [ARQUITECTURA_Y_FLUJO.md](docs/ARQUITECTURA_Y_FLUJO.md)
 - **Hacer cambios:** [GUIA_TECNICA_DESARROLLO.md](docs/GUIA_TECNICA_DESARROLLO.md)
-- **Referencia rápida:** [QUICK_REFERENCE.md](docs/QUICK_REFERENCE.md)
+- **Referencia rápida:** usar la sección "Inicio rápido" de [ARQUITECTURA_Y_FLUJO.md](docs/ARQUITECTURA_Y_FLUJO.md)
 - **Mapa navegación:** [INDEX.md](docs/INDEX.md)
 
 ## 📞 Soporte & Contacto
@@ -365,5 +393,5 @@ Para preguntas o issues:
 
 ---
 
-**Última actualización:** Febrero 9, 2026 | **Versión:** 1.0  
+**Ultima actualizacion:** Febrero 25, 2026 | **Version:** 1.1
 Para más información, ver [docs/INDEX.md](docs/INDEX.md)

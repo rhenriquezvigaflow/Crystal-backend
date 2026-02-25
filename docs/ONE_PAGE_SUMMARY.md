@@ -1,6 +1,8 @@
 # 🎯 One-Page Summary - Crystal Lagoons Backend
 
-**Resumen completo en 1 página**
+**Resumen completo en 1 pagina**
+
+**Version doc:** 1.1 | **Actualizado:** 2026-02-25
 
 ---
 
@@ -9,12 +11,14 @@
 ```
 SCADA Device → POST /ingest/scada → FastAPI
                                         ↓
-                     ┌───────────────────┼───────────────────┐
-                     ↓                   ↓                   ↓
-           RealtimeStateStore    IngestService        WebSocketManager
-           (Estado en memoria)   (Lógica BD)          (Real-time)
-                     │                   │                   │
-                     └───────────────────┼───────────────────┘
+                     ┌─────────────────────────────┼─────────────────────────────┐
+                     ↓                             ↓                             ↓
+           RealtimeStateStore          IngestService                WebSocketManager
+           (Estado en memoria)         (Lógica BD)                  (Real-time)
+                     │                             │                             │
+                     ├─ Timezone Loader + Watchdog                        │
+                     │                             │                             │
+                     └─────────────────────────────┼─────────────────────────────┘
                                         ↓
                               PostgreSQL Database
                               • scada_event (eventos)
@@ -46,8 +50,11 @@ SCADA Device → POST /ingest/scada → FastAPI
 | Interfaz | URL | Método | Uso |
 |----------|-----|--------|-----|
 | **HTTP** | POST /ingest/scada | POST | Enviar datos |
-| **HTTP** | GET /history | GET | Consultar histórico |
-| **WebSocket** | ws://host:8000/ws/scada?lagoon_id=X | WS | Real-time |
+| **HTTP** | GET /scada/{lagoon_id}/current | GET | Leer estado en memoria |
+| **HTTP** | GET /scada/{lagoon_id}/last-minute | GET | Valores por minuto |
+| **HTTP** | GET /scada/history/{resolution} | GET | Consultar historico agregado |
+| **HTTP** | GET /scada/{lagoon_id}/pump-events/last-3 | GET | Ultimos 3 eventos de bombas |
+| **WebSocket** | ws://host:8000/ws/scada?lagoon_id={lagoon_id} | WS | Real-time |
 
 ---
 
@@ -275,7 +282,6 @@ class IngestPayload(BaseModel):
 
 | Doc | Tiempo | Detalle |
 |-----|--------|---------|
-| [QUICK_REFERENCE.md](./QUICK_REFERENCE.md) | 5-10 min | Referencia rápida |
 | [ARQUITECTURA_Y_FLUJO.md](./ARQUITECTURA_Y_FLUJO.md) | 20-30 min | Arquitectura completa |
 | [GUIA_TECNICA_DESARROLLO.md](./GUIA_TECNICA_DESARROLLO.md) | 45-60 min | Guía con código |
 | [DIAGRAMAS_FLUJOS.md](./DIAGRAMAS_FLUJOS.md) | 15-20 min | Diagramas ASCII |
@@ -318,14 +324,29 @@ await ws_manager.broadcast(lagoon_id, mensaje)
 
 ---
 
+## Novedades v1.1 (2026-02-25)
+
+1. Endpoint nuevo para frontend:
+   - `GET /scada/{lagoon_id}/pump-events/last-3`
+2. Repositorio de eventos alineado con vista:
+   - `vw_scada_last_3_pump_actions` + filtro por `lagoon_id`
+3. Historico con vistas continuas documentado:
+   - script `scripts/sql/create_scada_continuous_aggregates.sql`
+4. Resolucion historica por path:
+   - `GET /scada/history/{resolution}`
+5. WebSocket activo documentado:
+   - `ws://host:8000/ws/scada?lagoon_id={lagoon_id}`
+
+---
+
 <div align="center">
 
 **¿Preguntas?** → Ver documentación completa  
-**¿Necesitas debuggear?** → [TROUBLESHOOTING](./QUICK_REFERENCE.md#-troubleshooting)  
+**¿Necesitas debuggear?** → revisar las secciones de troubleshooting en [ARQUITECTURA_Y_FLUJO.md](./ARQUITECTURA_Y_FLUJO.md#-endpoints-http) o [GUIA_TECNICA_DESARROLLO.md#-troubleshooting]  
 **¿Quieres entender más?** → [ARQUITECTURA_Y_FLUJO.md](./ARQUITECTURA_Y_FLUJO.md)  
 
 
 </div>
 
 ---
-Última actualización: Febrero 9, 2026
+Ultima actualizacion: 2026-02-25

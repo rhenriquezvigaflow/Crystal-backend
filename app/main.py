@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.ws.routes import router as ws_router
 from app.routers.ingest import router as ingest_router
+from app.routers.scada_event import router as scada_event_router
 from app.scada.history.router import router as scada_history_router
 
 from app.state.store import RealtimeStateStore
@@ -100,6 +101,7 @@ app = FastAPI(lifespan=lifespan)
 
 app.include_router(ingest_router)
 app.include_router(ws_router)
+app.include_router(scada_event_router)
 app.include_router(scada_history_router)
 app.include_router(auth_router)
 

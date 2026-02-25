@@ -1,6 +1,6 @@
 # 💻 Guía Técnica de Desarrollo - Crystal Lagoons Backend
 
-**Última actualización:** Febrero 2026  
+**Ultima actualizacion:** 2026-02-25
 **Público:** Desarrolladores Python/FastAPI
 
 ---
@@ -384,58 +384,47 @@ curl http://localhost:8000/state/laguna_1
 
 ---
 
-### Ejemplo 5: Query Historial Desde BD
+### Ejemplo 5: Consultar Historial Agregado
 
-**Obtener datos de un día:**
+Desde la versión 1.0 el backend expone un único endpoint flexible de historial:
 
-```python
-# 📁 app/routers/history.py
-
-from datetime import datetime, timedelta, timezone
-from sqlalchemy import and_
-
-@router.get("/history/{lagoon_id}")
-async def get_history(
-    lagoon_id: str,
-    days: int = 1,
-    request: Request,
-):
-    """Obtener histórico de últimos N días"""
-    db = SessionLocal()
-    try:
-        # Calcular rango de fechas
-        now = datetime.now(timezone.utc)
-        start_date = now - timedelta(days=days)
-        
-        # Query a BD
-        rows = db.query(ScadaMinute).filter(
-            and_(
-                ScadaMinute.lagoon_id == lagoon_id,
-                ScadaMinute.bucket >= start_date,
-                ScadaMinute.bucket <= now,
-            )
-        ).order_by(ScadaMinute.bucket.desc()).all()
-        
-        # Agrupar por tag
-        result = {}
-        for row in rows:
-            if row.tag_id not in result:
-                result[row.tag_id] = []
-            
-            result[row.tag_id].append({
-                "bucket": row.bucket.isoformat(),
-                "value": row.value_num or row.value_bool,
-            })
-        
-        return result
-    
-    finally:
-        db.close()
+```bash
+GET /scada/history/hourly?lagoon_id=laguna_1&start_date=2026-02-01&end_date=2026-02-07
 ```
+
+> `resolution` puede ser `hourly`, `daily` o `weekly`.
+> Se pueden filtrar `tags` opcionalmente: `&tags=tag1,tag2`.
+
+La respuesta agrupa los puntos por etiqueta y devuelve `lagoon_id`,
+`resolution`, `source` y una lista de series `{tag, points}`.
+
+(La lógica completa se encuentra en `app/scada/history/router.py` y
+`repo.get_history_rows`.)
 
 ---
 
-## ✅ Testing
+### Ejemplo 6: Ultimos 3 eventos de bombas
+
+```bash
+GET /scada/costa_del_lago/pump-events/last-3
+```
+
+Respuesta esperada (resumen):
+- `lagoon_id`
+- `events[]` con `tag_id`, `tag_label`, `start_local`
+
+### Ejemplo 7: Crear vistas continuas de historico
+
+```bash
+psql "$DATABASE_URL" -f scripts/sql/create_scada_continuous_aggregates.sql
+```
+
+Esto crea:
+- `public.scada_minute_hourly`
+- `public.scada_minute_daily`
+- `public.scada_minute_weekly`
+
+## Testing
 
 ### Unit Testing
 
@@ -856,4 +845,4 @@ Para preguntas o issues:
 
 ---
 
-**Actualizado:** 2026-02-09
+**Actualizado:** 2026-02-25

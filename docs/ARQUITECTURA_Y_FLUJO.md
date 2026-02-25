@@ -1,7 +1,7 @@
 # 📐 Arquitectura y Flujo de Inserción de Datos - Crystal Lagoons
 
-**Última actualización:** Febrero 2026  
-**Versión:** 1.0
+**Última actualización:** Febrero 25, 2026  
+**Versión:** 1.1
 
 ---
 
@@ -27,15 +27,20 @@
 - Mantiene un **estado en memoria** de los últimos valores
 - Envía actualizaciones en **tiempo real** al frontend a través de **WebSocket**
 - Procesa eventos booleanos (bomba ON/OFF) con timestamps precisos
+- Carga zonas horarias por laguna al iniciar para normalizar datos entrantes
+- Incluye un **Watchdog SCADA** que vigila el flujo y emite alertas si no se reciben ticks en cierto intervalo
 
 ### Stack Tecnológico
 
 ```
 Frontend (React/Vue) 
-    ↓ HTTP POST
-    ↓ WebSocket
+    ↓ HTTP POST / WS / GET
     ↓
 FastAPI Backend (Python)
+    ├─ Timezone loader + Watchdog
+    ├─ RealtimeStateStore
+    ├─ IngestService + Routers
+    └─ WebSocketManager
     ↓
 PostgreSQL
 ```
@@ -363,11 +368,53 @@ curl -X POST http://localhost:8000/ingest/scada \
 
 ---
 
-### 3. Historial SCADA
+### 3. Consultas SCADA / Lectura de Estado
 
-**Endpoint:** `GET /scada/history`
+#### Lectura en Memoria / Último Minuto
+- `GET /scada/{lagoon_id}/current`  → devuelve snapshot actual almacenado en RealtimeStateStore
+- `GET /scada/{lagoon_id}/last-minute` → últimos valores agregados en la tabla `scada_minute` (bucket por minuto)
 
-[Versión simplificada - ver `app/scada/history/router.py` para detalles]
+#### Historial (BD)
+**Endpoint:** `GET /scada/history/{resolution}`
+
+Parámetros de query:
+```
+# resolution va en el path: /scada/history/hourly|daily|weekly
+lagoon_id=<id>                  # laguna solicitada
+start_date=<ISO>                # fecha inicial (incluye)
+end_date=<ISO>                  # fecha final (incluye)
+tags=tag1,tag2,... (opcional)   # filtrar etiquetas específicas
+```
+
+**Respuesta:** objeto con campos `lagoon_id`, `resolution`, `source`, `series` (lista de {tag, points}).
+
+[Ver `app/scada/history/router.py` para la implementación detallada]
+
+#### Eventos de bombas (últimos 3)
+**Endpoint:** `GET /scada/{lagoon_id}/pump-events/last-3`
+
+Consulta operativa:
+- Lee desde la vista `vw_scada_last_3_pump_actions`.
+- Filtra por `lagoon_id`.
+- Devuelve `events[]` con `tag_id`, `tag_label`, `start_local`.
+
+Uso:
+- Frontend para panel de actividad reciente de bombas.
+- No reemplaza `pump_last_on`; es un endpoint de lectura histórica corta.
+
+#### Vistas continuas para histórico
+
+Script de infraestructura:
+- `scripts/sql/create_scada_continuous_aggregates.sql`
+
+Vistas creadas:
+- `public.scada_minute_hourly`
+- `public.scada_minute_daily`
+- `public.scada_minute_weekly`
+
+Estrategia de consulta en backend:
+- Si existe vista: usa vista continua (`source="view"`).
+- Si no existe: usa `time_bucket` directo sobre `scada_minute` (`source="table"`).
 
 ---
 
@@ -375,10 +422,10 @@ curl -X POST http://localhost:8000/ingest/scada \
 
 ### Conexión WebSocket
 
-**Endpoint:** `WebSocket /ws/scada`
+**Endpoint:** `WebSocket /ws/scada?lagoon_id=<id>`
 
-**Parámetro de Query:**
 ```
+# Ejemplo de URL
 ws://localhost:8000/ws/scada?lagoon_id=costa_del_lago
 ```
 
@@ -788,4 +835,4 @@ Agregar origins según necesidad.
 
 **Documento creado:** 2026-02-09  
 **Autor:** Equipo de Desarrollo Crystal Lagoons  
-**Versión:** 1.0
+**Versión:** 1.1

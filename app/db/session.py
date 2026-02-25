@@ -1,9 +1,12 @@
+import os
+from typing import Generator
+
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from typing import Generator
-import os
 
-DATABASE_URL = "postgresql+psycopg2://postgres:admin@localhost:5432/crystal_plc"
+from app.core.config import settings
+
+DATABASE_URL = settings.DATABASE_URL
 
 DB_STATEMENT_TIMEOUT_MS = int(
     os.getenv("DB_STATEMENT_TIMEOUT_MS", "120000")

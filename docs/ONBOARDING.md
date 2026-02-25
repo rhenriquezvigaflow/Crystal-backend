@@ -51,8 +51,8 @@ Respuesta esperada: Tienes contexto de por qué existe el proyecto
 1️⃣  [5 min] Lee: ONE_PAGE_SUMMARY.md
     └─ Entender el sistema en 1 página
 
-2️⃣  [10 min] Lee: QUICK_REFERENCE.md
-    └─ Familiarizarte con comandos y payloads
+2️⃣  [10 min] Lee: ARQUITECTURA_Y_FLUJO.md (sección "Visión general")
+    └─ Familiarizarte con componentes y endpoints básicos
 
 3️⃣  [15 min] Lee: ARQUITECTURA_Y_FLUJO.md - Primeras 3 secciones
     ├─ Visión General
@@ -71,19 +71,24 @@ Haz estas preguntas Y RESPÓNDELAS:
 1. ¿Cuál es el endpoint principal para enviar datos?
    → POST /ingest/scada
 
-2. ¿Cuáles son las 3 tablas principales en BD?
-   → scada_event, scada_minute, (y lagoons si existe)
+2. ¿Dónde obtengo el estado actual sin esperar WebSocket?
+   → GET /scada/{lagoon_id}/current o /last-minute
 
-3. ¿Cuál es el propósito de WebSocket?
-   → Enviar actualizaciones en tiempo real al frontend
+3. ¿Cómo solicito datos históricos?
+   → GET /scada/history/hourly?lagoon_id=X&start_date=...&end_date=...
 
-4. ¿Qué hace el IngestService?
+4. ¿Cuál es el propósito de WebSocket?
+   → Recibir snapshot inicial y ticks en tiempo real en ws://.../ws/scada?lagoon_id={lagoon_id}
+
+5. ¿Qué hace el IngestService?
    → Procesa datos, crea eventos, persiste en BD
 
-5. ¿Qué es RealtimeStateStore?
+6. ¿Qué es RealtimeStateStore?
    → Cache en memoria del último estado de cada laguna
 
-Si TODAS son correctas → Listo para siguiente parte ✅
+7. Como consulto los ultimos 3 eventos de bombas?
+   -> GET /scada/{lagoon_id}/pump-events/last-3
+Si TODAS son correctas -> Listo para siguiente parte
 Si hay dudas → Releer secciones relevantes ← NO avanzes
 ```
 
@@ -150,6 +155,9 @@ echo "DEBUG=True" >> .env
 psql postgresql://postgres:password@localhost:5432/crystal
 > SELECT 1;
 > \q
+
+# 5. Crear continuous aggregates para histórico (hourly/daily/weekly)
+psql postgresql://postgres:password@localhost:5432/crystal -f scripts/sql/create_scada_continuous_aggregates.sql
 ```
 
 **Asegurate que:**
@@ -577,7 +585,7 @@ RESULTADO:
 
 **R:** Los 6 documentos en `/docs`:
 1. ONE_PAGE_SUMMARY.md - Resumen de 1 página
-2. QUICK_REFERENCE.md - Referencia rápida
+2. ARQUITECTURA_Y_FLUJO.md - Arquitectura y endpoints (sustituye la vieja referencia rápida)
 3. ARQUITECTURA_Y_FLUJO.md - Documentación completa
 4. GUIA_TECNICA_DESARROLLO.md - Guía con código
 5. DIAGRAMAS_FLUJOS.md - Diagramas ASCII
@@ -640,7 +648,7 @@ RESULTADO:
 |-----------|-----------|
 | Setup inicial | PARTE 2 de esta guía |
 | Cómo funciona el sistema | ONE_PAGE_SUMMARY.md |
-| Comandos útiles | QUICK_REFERENCE.md |
+| Comandos útiles | ver sección "Inicio rápido" en ARQUITECTURA_Y_FLUJO.md |
 | Entender arquitectura | ARQUITECTURA_Y_FLUJO.md |
 | Código con ejemplos | GUIA_TECNICA_DESARROLLO.md |
 | Flujos visuales | DIAGRAMAS_FLUJOS.md |
@@ -681,6 +689,6 @@ Pedir tu primera tarea a tu manager**
 
 ---
 
-**Última actualización:** Febrero 9, 2026  
+**Ultima actualizacion:** Febrero 25, 2026  
 **Tiempo total de onboarding:** 4-6 horas  
 **Si tienes dudas:** Pregunta sin miedo, todos pasamos por esto 😊

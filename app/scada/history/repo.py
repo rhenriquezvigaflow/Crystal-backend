@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import List, Optional, Literal, Dict, Any
+from typing import List, Optional, Literal, Dict, Any, cast
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -14,15 +14,115 @@ Resolution = Literal["hourly", "daily", "weekly"]
 class ResolutionChoice:
     key: Resolution
     view: str
-    bucket: str
     label: str
 
 
 RESOLUTIONS: List[ResolutionChoice] = [
-    ResolutionChoice("hourly", "public.scada_minute_hourly", "1 hour", "1h"),
-    ResolutionChoice("daily",  "public.scada_minute_daily",  "1 day",  "1d"),
-    ResolutionChoice("weekly", "public.scada_minute_weekly", "1 week", "1w"),
+    # Vistas creadas por scripts/sql/create_scada_continuous_aggregates.sql
+    ResolutionChoice("hourly", "public.scada_minute_hourly", "1h"),
+    ResolutionChoice("daily", "public.scada_minute_daily", "1d"),
+    ResolutionChoice("weekly", "public.scada_minute_weekly", "1w"),
 ]
+
+RESOLUTION_BY_KEY: Dict[Resolution, ResolutionChoice] = {
+    r.key: r for r in RESOLUTIONS
+}
+
+VIEW_QUERY_BY_KEY: Dict[Resolution, Any] = {
+    "hourly": text(
+        """
+        SELECT
+            bucket,
+            lagoon_id,
+            tag_id,
+            avg_val
+        FROM public.scada_minute_hourly
+        WHERE lagoon_id = :lagoon_id
+          AND bucket BETWEEN :start AND :end
+          AND (:use_tags = FALSE OR tag_id = ANY(:tags))
+        ORDER BY bucket
+        """
+    ),
+    "daily": text(
+        """
+        SELECT
+            bucket,
+            lagoon_id,
+            tag_id,
+            avg_val
+        FROM public.scada_minute_daily
+        WHERE lagoon_id = :lagoon_id
+          AND bucket BETWEEN :start AND :end
+          AND (:use_tags = FALSE OR tag_id = ANY(:tags))
+        ORDER BY bucket
+        """
+    ),
+    "weekly": text(
+        """
+        SELECT
+            bucket,
+            lagoon_id,
+            tag_id,
+            avg_val
+        FROM public.scada_minute_weekly
+        WHERE lagoon_id = :lagoon_id
+          AND bucket BETWEEN :start AND :end
+          AND (:use_tags = FALSE OR tag_id = ANY(:tags))
+        ORDER BY bucket
+        """
+    ),
+}
+
+FALLBACK_QUERY_BY_KEY: Dict[Resolution, Any] = {
+    "hourly": text(
+        """
+        SELECT
+            time_bucket('1 hour', bucket_ts) AS bucket,
+            lagoon_id,
+            tag_id,
+            AVG(value_num) AS avg_val
+        FROM public.scada_minute
+        WHERE lagoon_id = :lagoon_id
+          AND bucket_ts BETWEEN :start AND :end
+          AND value_num IS NOT NULL
+          AND (:use_tags = FALSE OR tag_id = ANY(:tags))
+        GROUP BY 1,2,3
+        ORDER BY bucket
+        """
+    ),
+    "daily": text(
+        """
+        SELECT
+            time_bucket('1 day', bucket_ts) AS bucket,
+            lagoon_id,
+            tag_id,
+            AVG(value_num) AS avg_val
+        FROM public.scada_minute
+        WHERE lagoon_id = :lagoon_id
+          AND bucket_ts BETWEEN :start AND :end
+          AND value_num IS NOT NULL
+          AND (:use_tags = FALSE OR tag_id = ANY(:tags))
+        GROUP BY 1,2,3
+        ORDER BY bucket
+        """
+    ),
+    "weekly": text(
+        """
+        SELECT
+            time_bucket('1 week', bucket_ts) AS bucket,
+            lagoon_id,
+            tag_id,
+            AVG(value_num) AS avg_val
+        FROM public.scada_minute
+        WHERE lagoon_id = :lagoon_id
+          AND bucket_ts BETWEEN :start AND :end
+          AND value_num IS NOT NULL
+          AND (:use_tags = FALSE OR tag_id = ANY(:tags))
+        GROUP BY 1,2,3
+        ORDER BY bucket
+        """
+    ),
+}
 
 
 def table_exists(db: Session, qualified_name: str) -> bool:
@@ -33,83 +133,69 @@ def table_exists(db: Session, qualified_name: str) -> bool:
     return bool(row and row["oid"])
 
 
+def parse_resolution(resolution: Optional[str]) -> Optional[Resolution]:
+    if not resolution:
+        return None
+    key = resolution.strip().lower()
+    if key in RESOLUTION_BY_KEY:
+        return cast(Resolution, key)
+    return None
+
+
 def pick_resolution_by_days(days: float) -> ResolutionChoice:
-    if days <= 7:
-        return RESOLUTIONS[0]   # hourly
-    if days <= 90:
-        return RESOLUTIONS[1]   # daily
-    return RESOLUTIONS[2]       # weekly
+    # Alineado con frontend (<=14 hourly, <=180 daily, resto weekly)
+    if days <= 14:
+        return RESOLUTION_BY_KEY["hourly"]
+    if days <= 180:
+        return RESOLUTION_BY_KEY["daily"]
+    return RESOLUTION_BY_KEY["weekly"]
+
+
+def pick_resolution(days: float, requested: Optional[str]) -> ResolutionChoice:
+    parsed = parse_resolution(requested)
+    if parsed:
+        return RESOLUTION_BY_KEY[parsed]
+    return pick_resolution_by_days(days)
+
+
+def _build_params(
+    lagoon_id: str,
+    start_date: datetime,
+    end_date: datetime,
+    tags: Optional[List[str]],
+) -> dict[str, Any]:
+    return {
+        "lagoon_id": lagoon_id,
+        "start": start_date,
+        "end": end_date,
+        "use_tags": bool(tags),
+        "tags": tags or [],
+    }
 
 
 def fetch_from_view(
     db: Session,
-    view: str,
+    key: Resolution,
     lagoon_id: str,
     start_date: datetime,
     end_date: datetime,
     tags: Optional[List[str]],
 ):
-    where_tags = ""
-    params = {
-        "lagoon_id": lagoon_id,
-        "start": start_date,
-        "end": end_date,
-    }
-
-    if tags:
-        where_tags = "AND tag_id = ANY(:tags)"
-        params["tags"] = tags
-
-    sql = text(f"""
-        SELECT
-            bucket,
-            lagoon_id,
-            tag_id,
-            avg_val
-        FROM {view}
-        WHERE lagoon_id = :lagoon_id
-          AND bucket BETWEEN :start AND :end
-          {where_tags}
-        ORDER BY bucket
-    """)
-
+    params = _build_params(lagoon_id, start_date, end_date, tags)
+    sql = VIEW_QUERY_BY_KEY[key]
     return db.execute(sql, params).mappings().all()
 
 
 def fetch_fallback_timebucket(
     db: Session,
-    bucket: str,
+    key: Resolution,
     lagoon_id: str,
     start_date: datetime,
     end_date: datetime,
     tags: Optional[List[str]],
 ):
-    where_tags = ""
-    params = {
-        "lagoon_id": lagoon_id,
-        "start": start_date,
-        "end": end_date,
-    }
-
-    if tags:
-        where_tags = "AND tag_id = ANY(:tags)"
-        params["tags"] = tags
-
-    sql = text(f"""
-        SELECT
-            time_bucket('{bucket}', bucket_ts) AS bucket,
-            lagoon_id,
-            tag_id,
-            AVG(value_num) AS avg_val
-        FROM public.scada_minute
-        WHERE lagoon_id = :lagoon_id
-          AND bucket_ts BETWEEN :start AND :end
-          AND value_num IS NOT NULL
-          {where_tags}
-        GROUP BY 1,2,3
-        ORDER BY bucket
-    """)
-
+    params = _build_params(lagoon_id, start_date, end_date, tags)
+    sql = FALLBACK_QUERY_BY_KEY[key]
     return db.execute(sql, params).mappings().all()
 
 
@@ -118,17 +204,19 @@ def get_history_rows(
     lagoon_id: str,
     start_date: datetime,
     end_date: datetime,
-    resolution: Optional[str],   # ← se ignora, queda solo por compatibilidad
+    resolution: Optional[str],
     tags: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
+    if end_date < start_date:
+        start_date, end_date = end_date, start_date
 
     days = (end_date - start_date).total_seconds() / 86400.0
-    res = pick_resolution_by_days(days)
+    res = pick_resolution(days, resolution) 
 
     if table_exists(db, res.view):
         rows = fetch_from_view(
             db,
-            res.view,
+            res.key,
             lagoon_id,
             start_date,
             end_date,
@@ -138,7 +226,7 @@ def get_history_rows(
     else:
         rows = fetch_fallback_timebucket(
             db,
-            res.bucket,
+            res.key,
             lagoon_id,
             start_date,
             end_date,
@@ -148,6 +236,7 @@ def get_history_rows(
 
     return {
         "rows": rows,
-        "resolution": res.key,   # hourly | daily | weekly
+        "resolution": res.key,
         "source": source,
+        "requested_resolution": resolution,
     }

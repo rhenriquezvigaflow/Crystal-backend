@@ -18,7 +18,7 @@ Este documento contiene representaciones visuales de cómo funciona el sistema.
                  ▼                    ▼                    ▼
           ┌────────────┐       ┌─────────────┐    ┌──────────────┐
           │ HTTP POST  │       │ WebSocket   │    │ Query API    │
-          │ /ingest    │       │ /ws/scada   │    │ /history     │
+          │ /ingest    │       │ /ws/scada?lagoon_id=... │    │ /history     │
           └─────┬──────┘       └──────┬──────┘    └───────┬──────┘
                 │                     │                   │
                 └──────────┬──────────┼───────────────────┘
@@ -45,6 +45,11 @@ Este documento contiene representaciones visuales de cómo funciona el sistema.
             │  │ WebSocketManager               │ │
             │  │ - Broadcast a clientes        │ │
             │  └────────────────────────────▲──┘ │
+            │                               │   │
+            │  ┌────────▼──────────────────────┐ │
+            │  │ Timezone Loader + Watchdog     │ │
+            │  │ (startup helpers)              │ │
+            │  └───────────────────────────────┘ │
             │                               │   │
             └───────────────────────────────┼───┘
                                             │
@@ -678,4 +683,45 @@ SHUTDOWN: Ctrl+C
 **Nota:** Estos diagramas representan el flujo actual de la aplicación. 
 La arquitectura puede adaptarse según nuevas necesidades.
 
-Última actualización: 2026-02-09
+Ultima actualizacion: 2026-02-25
+---
+
+## Diagramas agregados v1.1 (2026-02-25)
+
+### A) Ultimos 3 eventos de bombas
+
+```
+Frontend
+   | GET /scada/{lagoon_id}/pump-events/last-3
+   v
+FastAPI Router (app/routers/scada_event.py)
+   |
+   v
+ScadaEventRepository
+   | SELECT lagoon_id, tag_id, tag_label, start_local
+   | FROM vw_scada_last_3_pump_actions
+   | WHERE lagoon_id = :lagoon_id
+   v
+JSON { lagoon_id, events[] }
+```
+
+### B) Historico con vistas continuas y fallback
+
+```
+GET /scada/history/{resolution}
+   |
+   v
+table_exists(public.scada_minute_<resolution>) ?
+   | yes                         | no
+   v                             v
+query view                     time_bucket fallback
+source = "view"                source = "table"
+```
+
+### C) WebSocket activo montado en main.py
+
+```
+ws://<host>/ws/scada?lagoon_id=<id>
+```
+
+Ultima actualizacion (revision v1.1): 2026-02-25

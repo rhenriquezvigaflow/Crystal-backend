@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Tuple, Any, List
 from threading import Lock
 
 from sqlalchemy.orm import Session
 from sqlalchemy.dialects.postgresql import insert
+from datetime import datetime, timezone
 
 from app.models.scada_minute import ScadaMinute
 from app.models.scada_event import ScadaEvent
@@ -13,6 +14,10 @@ from app.scada.value_codec import (
     is_state_or_bool_value,
     to_storage_fields,
 )
+
+# =========================================================
+# GLOBAL RUNTIME STATE
+# =========================================================
 
 _lock = Lock()
 
@@ -23,10 +28,25 @@ _minute_buffer: Dict[
 
 _last_state: Dict[tuple[str, str], Any] = {}
 
+_runtime_metrics = {
+    "last_ingest_utc": None,
+    "last_lagoon": None,
+    "last_minute_rows": 0,
+    "last_event_count": 0,
+}
+
+
+# =========================================================
+# PUBLIC HELPERS
+# =========================================================
 
 def initialize_last_state(lagoon_id: str, states: Dict[str, Any]):
     for tag_id, value in states.items():
         _last_state[(lagoon_id, tag_id)] = value
+
+
+def get_runtime_metrics():
+    return _runtime_metrics.copy()
 
 
 def _bucket_minute(ts: datetime) -> datetime:
@@ -39,23 +59,23 @@ def reset_runtime_state(
 ) -> bool:
     acquired = _lock.acquire(timeout=lock_timeout_sec)
     if not acquired:
-        print(
-            f"[INGEST RESET SKIPPED] reason={reason} "
-            "lock busy"
-        )
+        print(f"[INGEST RESET SKIPPED] reason={reason} lock busy")
         return False
 
     try:
         minute_keys = len(_minute_buffer)
         state_keys = len(_last_state)
+
         _minute_buffer.clear()
         _last_state.clear()
+
         print(
             f"[INGEST RESET] reason={reason} "
             f"cleared minute_buffer={minute_keys} "
             f"last_state={state_keys}"
         )
         return True
+
     finally:
         _lock.release()
 
@@ -70,13 +90,15 @@ def ingest(
     bucket = _bucket_minute(ts)
 
     detected_events: List[tuple[str, Any, Any]] = []
-    flush_rows: List[tuple[str, datetime, str, Any]] = []
+    flush_rows: List[dict] = []
+
 
     with _lock:
 
         key = (lagoon_id, bucket)
         _minute_buffer.setdefault(key, {})
 
+        # Detect state changes
         for tag_id, value in tags.items():
 
             if not is_state_or_bool_value(value):
@@ -106,18 +128,29 @@ def ingest(
             tag_dict = _minute_buffer.pop(fk, {})
 
             for tag_id, values in tag_dict.items():
+
                 last_val = values[-1]
-                flush_rows.append(
-                    (lagoon_id_fk, bucket_fk, tag_id, last_val)
-                )
+
+                state, value_num, value_bool = to_storage_fields(last_val)
+
+                flush_rows.append({
+                    "lagoon_id": lagoon_id_fk,
+                    "tag_id": tag_id,
+                    "bucket": bucket_fk,
+                    "state": state,
+                    "value_num": value_num,
+                    "value_bool": value_bool,
+                })
+
+
 
     try:
 
         for tag_id, previous, value in detected_events:
 
             print(
-                f"[EVENT DETECTED] {lagoon_id} {tag_id} "
-                f"{previous} -> {value}"
+                f"[EVENT DETECTED] {lagoon_id} "
+                f"{tag_id} {previous} -> {value}"
             )
 
             open_event = (
@@ -160,18 +193,9 @@ def ingest(
                 f"{lagoon_id} {tag_id}"
             )
 
-        for lagoon_id_fk, bucket_fk, tag_id, last_val in flush_rows:
+        if flush_rows:
 
-            state, value_num, value_bool = to_storage_fields(last_val)
-
-            stmt = insert(ScadaMinute).values(
-                lagoon_id=lagoon_id_fk,
-                tag_id=tag_id,
-                bucket=bucket_fk,
-                state=state,
-                value_num=value_num,
-                value_bool=value_bool,
-            )
+            stmt = insert(ScadaMinute).values(flush_rows)
 
             stmt = stmt.on_conflict_do_update(
                 index_elements=["lagoon_id", "tag_id", "bucket"],
@@ -185,9 +209,21 @@ def ingest(
             db.execute(stmt)
 
             print(
-                f"[MINUTE UPSERT] "
-                f"{lagoon_id_fk} {tag_id} {bucket_fk}"
+                f"[BATCH MINUTE UPSERT] "
+                f"utc={datetime.now(timezone.utc).isoformat()} "
+                f"lagoon={lagoon_id} "
+                f"bucket_utc={bucket.isoformat()} "
+                f"rows={len(flush_rows)} "
+                f"events={len(detected_events)}"
             )
+
+        # -------------------------
+        _runtime_metrics["last_ingest_utc"] = datetime.now(timezone.utc)
+        _runtime_metrics["last_lagoon"] = lagoon_id
+        _runtime_metrics["last_minute_rows"] = len(flush_rows)
+        _runtime_metrics["last_event_count"] = len(detected_events)
+
+        db.commit()
 
     except Exception:
         db.rollback()

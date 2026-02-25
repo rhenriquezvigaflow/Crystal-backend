@@ -1,12 +1,13 @@
 import asyncio
 import os
-from fastapi import APIRouter, Request, HTTPException
+from fastapi import APIRouter, Request, HTTPException, Depends
 from pydantic import BaseModel
 from datetime import datetime, timezone
 from typing import Optional
 
 from app.db.session import SessionLocal
 from app.services.ingest_service import ingest
+from app.security.api_key import verify_collector_key
 
 router = APIRouter()
 INGEST_TIMEOUT_SEC = float(os.getenv("INGEST_TIMEOUT_SEC", "125"))
@@ -40,6 +41,7 @@ def _persist_ingest(lagoon_id: str, ts_dt: datetime, tags: dict):
 async def ingest_scada(
     payload: IngestPayload,
     request: Request,
+    _: None = Depends(verify_collector_key),
 ):
     state = request.app.state.state_store
     ws = request.app.state.ws_manager
