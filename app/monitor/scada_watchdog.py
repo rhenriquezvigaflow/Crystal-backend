@@ -145,13 +145,7 @@ class ScadaStallWatchdog:
     # ===============================
 
     def _is_stalled(self, snapshot: WatchdogSnapshot, runtime: dict) -> bool:
-        """
-        Regla PRO:
-        - Si todavía no hubo ninguna ingesta en runtime desde que levantó el proceso,
-          NO declarar stall (evita falso positivo por BD vieja).
-        - Una vez hubo ingesta, usar como señal primaria "edad desde last_ingest_utc".
-        - Fallback: si last_ingest_utc no está (por algún motivo), usar minute_write_age_sec.
-        """
+    
         now_utc = datetime.now(timezone.utc)
 
         last_ingest_utc = runtime.get("last_ingest_utc")

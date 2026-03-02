@@ -4,6 +4,25 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
+LAYOUT2_VALVE_TAG_SOURCES: Dict[str, tuple[str, ...]] = {
+    "ve237": ("VE237_ST",),
+    "ve238": ("VE238_ST",),
+    "ve239": ("VE239_ST",),
+    "ve240": ("VE240_ST",),
+    "ve244": ("VE244_ST",),
+    "ve401": ("VE401_ST",),
+    "ve402": ("VE402_ST",),
+}
+LAYOUT2_VALVE_DEFAULT_STATE = 0
+LAYOUT2_VALVE_VALID_STATES = {0, 1, 2, 3}
+LAYOUT2_VALVE_CANONICAL_TAGS = set(LAYOUT2_VALVE_TAG_SOURCES.keys())
+LAYOUT2_VALVE_ALIAS_TAGS = {
+    source_tag
+    for final_tag, source_tags in LAYOUT2_VALVE_TAG_SOURCES.items()
+    for source_tag in source_tags
+    if source_tag != final_tag
+}
+
 
 class RealtimeStateStore:
 
@@ -25,6 +44,9 @@ class RealtimeStateStore:
 
     def preload_state(self, lagoon_id: str, tags: Dict[str, Any]):
         self._tags[lagoon_id].update(tags)
+        self._tags[lagoon_id].update(
+            self._normalize_layout2_valve_tags(tags)
+        )
 
     def set_pump_last_on(self, lagoon_id: str, tag_id: str, ts: str):
         self._pump_last_on[lagoon_id][tag_id] = ts
@@ -45,6 +67,9 @@ class RealtimeStateStore:
     ):
 
         self._tags[lagoon_id].update(tags)
+        self._tags[lagoon_id].update(
+            self._normalize_layout2_valve_tags(tags)
+        )
         self._last_ts[lagoon_id] = ts
 
         if pump_last_on_updates:
@@ -55,6 +80,81 @@ class RealtimeStateStore:
     # =====================================================
     # INTERNAL HELPERS
     # =====================================================
+
+    def _normalize_layout2_valve_state(
+        self,
+        tag_id: str,
+        value: Any,
+    ) -> int:
+        if value is None:
+            return LAYOUT2_VALVE_DEFAULT_STATE
+
+        normalized: int | None = None
+
+        if isinstance(value, bool):
+            normalized = int(value)
+        elif isinstance(value, int):
+            normalized = value
+        elif isinstance(value, float):
+            if value.is_integer():
+                normalized = int(value)
+        elif isinstance(value, str):
+            stripped_value = value.strip()
+            if stripped_value:
+                try:
+                    normalized = int(stripped_value)
+                except ValueError:
+                    normalized = None
+
+        if normalized is None:
+            print(
+                f"[WS SCADA INVALID VALVE STATE] tag={tag_id} "
+                f"value={value!r} reason=unparseable default=0"
+            )
+            return LAYOUT2_VALVE_DEFAULT_STATE
+
+        if normalized not in LAYOUT2_VALVE_VALID_STATES:
+            print(
+                f"[WS SCADA INVALID VALVE STATE] tag={tag_id} "
+                f"value={value!r} normalized={normalized} "
+                f"reason=out_of_range default=0"
+            )
+            return LAYOUT2_VALVE_DEFAULT_STATE
+
+        return normalized
+
+    def _normalize_layout2_valve_tags(
+        self,
+        tags: Dict[str, Any],
+    ) -> Dict[str, int]:
+        normalized_tags: Dict[str, int] = {}
+
+        for final_tag, source_tags in LAYOUT2_VALVE_TAG_SOURCES.items():
+            for source_tag in source_tags:
+                if source_tag not in tags:
+                    continue
+
+                normalized_tags[final_tag] = (
+                    self._normalize_layout2_valve_state(
+                        final_tag,
+                        tags.get(source_tag),
+                    )
+                )
+                break
+
+        return normalized_tags
+
+    def _payload_tags(self, lagoon_id: str) -> Dict[str, Any]:
+        tags = {
+            tag_id: value
+            for tag_id, value in self._tags.get(lagoon_id, {}).items()
+            if tag_id not in LAYOUT2_VALVE_ALIAS_TAGS
+        }
+
+        for tag_id in LAYOUT2_VALVE_CANONICAL_TAGS:
+            tags.setdefault(tag_id, LAYOUT2_VALVE_DEFAULT_STATE)
+
+        return tags
 
     def _compute_plc_status(self, lagoon_id: str, timeout_sec: int = 10) -> str:
         last_ts = self._last_ts.get(lagoon_id)
@@ -95,7 +195,7 @@ class RealtimeStateStore:
             "plc_status": self._compute_plc_status(lagoon_id),
             "local_time": self._compute_local_time(lagoon_id),
             "timezone": self._lagoon_timezone.get(lagoon_id),
-            "tags": dict(self._tags.get(lagoon_id, {})),
+            "tags": self._payload_tags(lagoon_id),
             "pump_last_on": dict(self._pump_last_on.get(lagoon_id, {})),
             "start_ts": self._start_ts.get(lagoon_id),
         }
