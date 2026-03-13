@@ -5,6 +5,7 @@ from typing import List, Optional, Dict
 
 from app.db.session import get_db
 from app.scada.history.repo import get_history_rows
+from app.security.rbac import ALL_READ_ROLES, require_roles
 
 
 router = APIRouter(
@@ -20,6 +21,7 @@ def get_history(
     end_date: datetime = Query(...),
     tags: Optional[List[str]] = Query(None),
     db: Session = Depends(get_db),
+    _user: dict = Depends(require_roles(ALL_READ_ROLES)),
 ):
     data = get_history_rows(
         db=db,

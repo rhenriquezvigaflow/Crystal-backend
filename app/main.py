@@ -1,25 +1,30 @@
 import app.models
-import app.auth.model
 
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.ws.routes import router as ws_router
+from app.auth.auth import router as auth_router
+from app.auth.routers.lagoons_router import router as rbac_lagoons_router
+from app.routers.health import router as health_router
 from app.routers.ingest import router as ingest_router
+from app.routers.scada_read import router as scada_read_router
 from app.routers.scada_event import router as scada_event_router
 from app.scada.history.router import router as scada_history_router
+from app.routers.crystal.lagoons import router as crystal_lagoons_router
+from app.routers.crystal.layout import router as crystal_layout_router
+from app.routers.crystal.tags import router as crystal_tags_router
+from app.routers.small.lagoons import router as small_lagoons_router
+from app.routers.small.control import router as small_control_router
+from app.routers.small.chemicals import router as small_chemicals_router
 
 from app.state.store import RealtimeStateStore
 from app.ws.manager import WebSocketManager
-from app.persist.worker import PersistWorker
 from app.db.session import SessionLocal
 from app.monitor.scada_watchdog import ScadaStallWatchdog
 from app.repositories.scada_event_repository import ScadaEventRepository
 from app.models.scada_event import ScadaEvent
-from app.services.ingest_service import initialize_last_state
-
-from app.auth.auth import router as auth_router
 
 from app.models.lagoon import Lagoon
 
@@ -99,11 +104,20 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 
+app.include_router(health_router)
+app.include_router(auth_router)
+app.include_router(rbac_lagoons_router)
 app.include_router(ingest_router)
 app.include_router(ws_router)
+app.include_router(scada_read_router)
 app.include_router(scada_event_router)
 app.include_router(scada_history_router)
-app.include_router(auth_router)
+app.include_router(crystal_lagoons_router)
+app.include_router(crystal_layout_router)
+app.include_router(crystal_tags_router)
+app.include_router(small_lagoons_router)
+app.include_router(small_control_router)
+app.include_router(small_chemicals_router)
 
 
 app.add_middleware(

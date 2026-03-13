@@ -1,5 +1,6 @@
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends
+from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect
 from app.deps.realtime import get_ws_manager, get_state_store
+from app.security.rbac import ALL_READ_ROLES, ensure_websocket_roles
 
 router = APIRouter()
 
@@ -7,9 +8,15 @@ router = APIRouter()
 async def scada_ws(
     lagoon_id: str,
     ws: WebSocket,
+    token: str | None = Query(None),
     manager=Depends(get_ws_manager),
     state=Depends(get_state_store),
 ):
+    ensure_websocket_roles(
+        websocket=ws,
+        roles=ALL_READ_ROLES,
+        token=token,
+    )
     await ws.accept()
     await manager.connect(lagoon_id, ws)
 

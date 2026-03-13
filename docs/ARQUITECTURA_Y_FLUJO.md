@@ -1,838 +1,345 @@
-# 📐 Arquitectura y Flujo de Inserción de Datos - Crystal Lagoons
+# Arquitectura y Flujo - Crystal Lagoons Backend
 
-**Última actualización:** Febrero 25, 2026  
-**Versión:** 1.1
-
----
-
-## 📋 Tabla de Contenidos
-
-1. [Visión General](#visión-general)
-2. [Componentes Principales](#componentes-principales)
-3. [Flujo de Inserción de Datos](#flujo-de-inserción-de-datos)
-4. [Endpoints HTTP](#endpoints-http)
-5. [Sistema WebSocket (Real-time)](#sistema-websocket-real-time)
-6. [Modelos de Base de Datos](#modelos-de-base-de-datos)
-7. [Estado y Sincronización](#estado-y-sincronización)
-8. [Diagramas de Arquitectura](#diagramas-de-arquitectura)
+**Ultima actualizacion:** 2026-03-13
+**Version:** 1.2
 
 ---
 
-## 🎯 Visión General
+## Tabla de contenidos
 
-**Crystal Lagoons** es una aplicación **FastAPI** que ingiere datos SCADA de lagunas en tiempo real. El sistema:
+1. Vision general
+2. Startup y ciclo de vida
+3. Seguridad
+4. Componentes principales
+5. Endpoints activos
+6. Flujos funcionales
+7. Modelos y vistas de datos
+8. Configuracion operativa
 
-- Recibe datos de sensores (tags) a través de un **endpoint HTTP POST**
-- Almacena los datos en **PostgreSQL** de forma persistente
-- Mantiene un **estado en memoria** de los últimos valores
-- Envía actualizaciones en **tiempo real** al frontend a través de **WebSocket**
-- Procesa eventos booleanos (bomba ON/OFF) con timestamps precisos
-- Carga zonas horarias por laguna al iniciar para normalizar datos entrantes
-- Incluye un **Watchdog SCADA** que vigila el flujo y emite alertas si no se reciben ticks en cierto intervalo
+---
 
-### Stack Tecnológico
+## Vision general
 
-```
-Frontend (React/Vue) 
-    ↓ HTTP POST / WS / GET
-    ↓
-FastAPI Backend (Python)
-    ├─ Timezone loader + Watchdog
-    ├─ RealtimeStateStore
-    ├─ IngestService + Routers
-    └─ WebSocketManager
-    ↓
-PostgreSQL
+El backend es una API FastAPI que:
+
+- ingiere datos SCADA en tiempo real,
+- persiste historico y eventos de estado,
+- mantiene estado en memoria por laguna,
+- publica snapshot/tick por websocket,
+- aplica control de acceso por JWT + RBAC.
+
+Arquitectura logica:
+
+```text
+Collector -> /ingest/scada -> IngestService -> PostgreSQL
+                                |
+                                +-> RealtimeStateStore -> WebSocketManager
+
+User UI -> /auth/login -> JWT
+User UI -> /scada/*, /api/* (bearer token)
+User UI -> /ws/* (token + permiso por laguna)
 ```
 
 ---
 
-## 🧩 Componentes Principales
+## Startup y ciclo de vida
 
-### 1. **FastAPI Application** (`app/main.py`)
+`app/main.py` define `lifespan` y durante startup ejecuta:
 
-Punto de entrada de la aplicación. Inicializa:
+1. Crea singletons:
+   - `app.state.state_store` (`RealtimeStateStore`)
+   - `app.state.ws_manager` (`WebSocketManager`)
+2. Carga `timezone` por laguna desde tabla `lagoons`.
+3. Detecta lagunas con eventos y precarga `pump_last_on` desde `vw_scada_last_3_pump_actions`.
+4. Inicia `ScadaStallWatchdog`.
 
-```python
-# Singletons (creados una sola vez al iniciar)
-- RealtimeStateStore      # Estado en memoria de última lectura
-- WebSocketManager        # Gestor de conexiones WebSocket
-- PersistWorker          # Worker para persistir datos asincronamente
-```
-
-**Ciclo de vida:**
-
-```
-🟢 BOOT
-├─ Cargar último estado de BD (pump_last_on)
-├─ Iniciar PersistWorker
-└─ Listo para recibir datos
-
-🔴 SHUTDOWN
-└─ Detener PersistWorker
-```
+En shutdown detiene watchdog.
 
 ---
 
-### 2. **Ingest Router** (`app/routers/ingest.py`)
+## Seguridad
 
-Endpoint HTTP que recibe datos SCADA.
+### 1) Ingest por API key
 
-#### Endpoint: `POST /ingest/scada`
+`POST /ingest/scada` exige header:
 
-**Payload:**
+- `x-api-key: <COLLECTOR_API_KEY>`
+
+Validado por `app/security/api_key.py`.
+
+### 2) Login y JWT
+
+`POST /auth/login` retorna:
+
+- `access_token`
+- `token_type` (`bearer`)
+- `expires_in`
+- `user` con `roles` y `role` (compatibilidad legacy)
+
+Claims esperadas en token:
+
+- `sub` (user_id)
+- `email`
+- `roles` (lista)
+- `role` (string legacy)
+
+### 3) Roles
+
+Roles vigentes:
+
+- `AdminCrystal`
+- `VisualCrystal`
+- `AdminSmall`
+- `VisualSmall`
+
+Grupos usados por dependencias RBAC:
+
+- Crystal read: `AdminCrystal`, `VisualCrystal`
+- Crystal write: `AdminCrystal`
+- Small read: `AdminSmall`, `VisualSmall`
+- Small write: `AdminSmall`
+- Read general SCADA: union de todos los de lectura
+
+### 4) Permisos por laguna
+
+Permisos evaluados sobre `vw_user_lagoons`:
+
+- `can_view`
+- `can_edit`
+- `can_control`
+
+Dependencias:
+
+- `require_permission(...)` para HTTP
+- `ensure_websocket_permission(...)` para WebSocket
+
+### 5) WebSocket auth
+
+Soporta token por:
+
+- query `token=<jwt>`
+- header `Authorization: Bearer <jwt>`
+
+Si no hay token, token invalido o permiso insuficiente -> cierre WS con policy violation (`1008`).
+
+---
+
+## Componentes principales
+
+### FastAPI app (`app/main.py`)
+
+Responsable de:
+
+- registrar routers,
+- inicializar estado y watchdog,
+- configurar CORS.
+
+### Ingest router (`app/routers/ingest.py`)
+
+- endpoint: `POST /ingest/scada`
+- parsea payload `{lagoon_id, timestamp?, tags}`
+- persiste en hilo separado con timeout configurable (`INGEST_TIMEOUT_SEC`)
+- actualiza estado y hace broadcast WS
+
+### Ingest service (`app/services/ingest_service.py`)
+
+- detecta cambios de estado (`_last_state`)
+- cierra evento abierto y crea nuevo evento de `STATE_CHANGE`
+- mantiene buffer por minuto
+- hace upsert por lote en `scada_minute`
+
+### RealtimeStateStore (`app/state/store.py`)
+
+Mantiene por laguna:
+
+- tags actuales
+- ultimo timestamp (`ts`)
+- `pump_last_on`
+- `start_ts`
+- timezone
+
+Normaliza tags de valvulas de layout 2 (`ve237`, `ve238`, etc.) y calcula:
+
+- `plc_status` (`online`/`offline`)
+- `local_time`
+
+### WebSocketManager (`app/ws/manager.py`)
+
+- mantiene conexiones por `lagoon_id`
+- envia `snapshot` al conectar
+- envia `tick` en cada ingest
+
+### Historial (`app/scada/history/repo.py`)
+
+- selecciona resolucion (`hourly`, `daily`, `weekly`)
+- usa vista continua si existe (`source=view`)
+- fallback con `time_bucket` sobre `scada_minute` (`source=table`)
+
+---
+
+## Endpoints activos
+
+### Publicos
+
+- `GET /health`
+- `POST /auth/login`
+
+### Ingest
+
+- `POST /ingest/scada` (x-api-key)
+
+Body:
+
 ```json
 {
   "lagoon_id": "costa_del_lago",
-  "ts": "2026-02-09T14:30:45Z",  
+  "timestamp": "2026-03-13T14:30:45Z",
   "tags": {
-    "bomba_1": true,
-    "temperatura": 28.5,
-    "presion": 2.3
-  }
-}
-```
-
-**Flujo de procesamiento:**
-
-```
-POST /ingest/scada
-    ↓
-1. Parsear timestamp 
-2. Actualizar RealtimeStateStore 
-    ↓
-3. Llamar a ingest_service.ingest()
-    ├─ Bufferizar valores en minutos
-    ├─ Crear/cerrar eventos booleanos
-    └─ Persistir en BD
-    ↓
-4. Broadcast a WebSocket 
-    ↓
-200 OK
-```
-
----
-
-### 3. **Ingest Service** (`app/services/ingest_service.py`)
-
-Core de la lógica de procesamiento. Maneja:
-
-#### A. **Buffering por minutos**
-
-Los datos se agrupan en buckets de **1 minuto** para optimizar almacenamiento:
-
-```python
-_minute_buffer: Dict[Tuple[lagoon_id, bucket_time], Dict[tag_id, [valores]]]
-
-Ejemplo:
-("costa_del_lago", "2026-02-09T14:30:00Z") → {
-  "temperatura": [28.1, 28.3, 28.5],
-  "presion": [2.1, 2.2, 2.3]
-}
-```
-
-**Estrategia de flush:**
-- Cuando llega un dato de un minuto más reciente → flush del minuto anterior
-- Se guarda el **último valor** del minuto en `ScadaMinute`
-
-```python
-# De [28.1, 28.3, 28.5] → guarda 28.5 en BD
-last_val = values[-1]
-```
-
-#### B. **Manejo de Eventos Booleanos**
-
-Track de cambios de estado (False → True o True → False):
-
-```python
-# Transición ABIERTO (False/None → True)
-@broadcaster:pump OFF → Crear novo ScadaEvent con start_ts
-└─ _open_event_id[(lagoon_id, tag_id)] = event.id
-
-# Transición CERRADO (True → False)
-@broadcast: pump ON → Cerrar ScadaEvent con end_ts
-└─ Actualizar registro existente con end_ts
-```
-
-**Estado persistente:**
-```python
-_last_bool_state: Dict[(lagoon_id, tag_id), bool]  # Último estado conocido
-_open_event_id:   Dict[(lagoon_id, tag_id), id]    # ID del evento abierto
-```
-
----
-
-### 4. **WebSocket Manager** (`app/ws/manager.py`)
-
-Gestor de conexiones bidireccionales:
-
-```python
-class WebSocketManager:
-    _connections: Dict[lagoon_id, Set[WebSocket]]
-    
-    async def connect(lagoon_id, ws)      # Agregar cliente
-    async def disconnect(lagoon_id, ws)   # Remover cliente
-    async def broadcast(lagoon_id, msg)   # Enviar a TODOS los clientes
-```
-
-**Características:**
-- ✅ Thread-safe (usa asyncio.Lock)
-- ✅ Auto-cleanup de conexiones muertas
-- ✅ Broadcasting por laguna (solo a clientes interesados)
-
----
-
-### 5. **Realtime State Store** (`app/state/store.py`)
-
-Estado compartido en memoria que actúa como "cache" del último tick:
-
-```python
-class RealtimeStateStore:
-    tags: Dict[lagoon_id, Dict[tag_id, valor]]        # Valores actuales
-    last_ts: Dict[lagoon_id, str]                      # Último timestamp
-    pump_last_on: Dict[lagoon_id, Dict[tag_id, ts]]   # Último time ON
-    start_ts: Dict[lagoon_id, str]                     # Inicio de ciclo
-```
-
-**Uso:**
-```python
-# Cuando llega un ingest
-await state.update(lagoon_id, tags, ts_iso)
-
-# Cuando se conecta un WebSocket (snapshot inicial)
-state.snapshot(lagoon_id)
-
-# Cuando se broadcast (estado actualizado)
-await state.tick_payload(lagoon_id)
-```
-
----
-
-## 🔄 Flujo de Inserción de Datos
-
-### Diagrama de Secuencia
-
-```
-CLIENTE SCADA → POST /ingest/scada
-    │
-    └─→ [1] ingest_router.ingest_scada()
-        │
-        ├─→ [2] RealtimeStateStore.update()
-        │       └─ Actualizar tags, last_ts, pump_last_on
-        │
-        ├─→ [3] ingest_service.ingest()
-        │       ├─ Bufferizar datos de minuto actual
-        │       ├─ Detectar cambios booleanos (eventos)
-        │       │  ├─ Si False→True: INSERT ScadaEvent (abierto)
-        │       │  └─ Si True→False: UPDATE ScadaEvent (cerrado)
-        │       │
-        │       └─ Flush minutos anteriores cerrados
-        │           └─ INSERT/UPDATE ScadaMinute (agregado por minuto)
-        │
-        ├─→ [4] Commit a PostgreSQL 
-        │
-        └─→ [5] WebSocketManager.broadcast()
-            └─ Enviar tick_payload a TODOS los WebSocket conectados
-                │
-                └─→ CLIENTES WS ← JSON actualizado (real-time)
-```
-
-### Ejemplo Paso a Paso
-
-**Entrada:**
-```json
-POST /ingest/scada
-
-{
-  "lagoon_id": "costa_del_lago",
-  "ts": "2026-02-09T14:30:45Z",
-  "tags": {
-    "bomba_1": true,
+    "bomba_1": 1,
     "temperatura": 28.5
   }
 }
 ```
 
-**Paso 1 - Actualizar Estado**
-```python
-RealtimeStateStore:
-  tags["costa_del_lago"] = {"bomba_1": true, "temperatura": 28.5}
-  last_ts["costa_del_lago"] = "2026-02-09T14:30:45Z"
-```
+### SCADA general (bearer + rol lectura)
 
-**Paso 2 - Procesar Ingest**
-```python
-minute_buffer[("costa_del_lago", 2026-02-09T14:30:00Z)] = {
-  "bomba_1": [true],
-  "temperatura": [28.5]
-}
+- `GET /scada/{lagoon_id}/last-minute`
+- `GET /scada/{lagoon_id}/current`
+- `GET /scada/{lagoon_id}/pump-events/last-3`
+- `GET /scada/history/{resolution}`
 
-# Evento: bomba_1 anteriormente OFF → ahora ON
-_last_bool_state[("costa_del_lago", "bomba_1")] = False (anterior)
-                                                    ↓
-# Crear evento abierto
-INSERT INTO scada_event (id, lagoon_id, tag_id, start_ts, end_ts)
-VALUES (uuid(), "costa_del_lago", "bomba_1", "2026-02-09T14:30:45Z", NULL)
+`resolution` en path: `hourly|daily|weekly`.
 
-_last_bool_state[("costa_del_lago", "bomba_1")] = True (nuevo)
-```
+### RBAC por permisos
 
-**Paso 3 - Broadcast WebSocket**
-```json
-{
-  "type": "tick",
-  "lagoon_id": "costa_del_lago",
-  "ts": "2026-02-09T14:30:45Z",
-  "tags": {
-    "bomba_1": true,
-    "temperatura": 28.5
-  },
-  "pump_last_on": {
-    "bomba_1": "2026-02-09T14:30:45Z"
-  },
-  "start_ts": {
-    "costa_del_lago": "2026-02-09T14:30:45Z"
-  }
-}
-```
+- `GET /lagoons` -> requiere `can_view` (cualquier laguna)
+- `PUT /lagoons/{id}` -> requiere `can_edit` sobre `{id}`
+- `POST /control/pump` -> valida `can_control` sobre `cmd.lagoon_id`
 
----
+### APIs Crystal
 
-## 🌐 Endpoints HTTP
+- `GET /api/crystal/lagoons`
+- `GET /api/crystal/dashboard`
+- `GET /api/crystal/lagoons/{lagoon_id}/last-minute`
+- `GET /api/crystal/lagoons/{lagoon_id}/current`
+- `GET /api/crystal/lagoons/{lagoon_id}/pump-events/last-3`
+- `GET /api/crystal/history`
+- `GET /api/crystal/layout`
+- `PUT /api/crystal/layout`
+- `DELETE /api/crystal/layout`
+- `GET /api/crystal/tags`
+- `PUT /api/crystal/tags`
+- `DELETE /api/crystal/tags`
 
-### 1. Health Check
+### APIs Small
 
-**Endpoint:** `GET /health`
+- `GET /api/small/lagoons`
+- `GET /api/small/dashboard`
+- `GET /api/small/lagoons/{lagoon_id}/last-minute`
+- `GET /api/small/lagoons/{lagoon_id}/current`
+- `GET /api/small/lagoons/{lagoon_id}/pump-events/last-3`
+- `GET /api/small/history`
+- `POST /api/small/control`
+- `PUT /api/small/control`
+- `GET /api/small/chemicals`
+- `POST /api/small/chemicals`
+- `DELETE /api/small/chemicals`
 
-```bash
-curl http://localhost:8000/health
-```
+### WebSocket
 
-**Respuesta:** 
-```json
-{"status": "ok"}
-```
+- `WS /ws/scada?lagoon_id=<id>&token=<jwt>`
+- `WS /ws/scada/{lagoon_id}?token=<jwt>`
+- `WS /ws/crystal/{lagoon_id}?token=<jwt>`
+- `WS /ws/small/{lagoon_id}?token=<jwt>`
 
 ---
 
-### 2. Ingest SCADA
+## Flujos funcionales
 
-**Endpoint:** `POST /ingest/scada`
+### Flujo de ingest
 
-**Descripción:** Ingiere datos de sensores SCADA
+1. Collector llama `POST /ingest/scada` con `x-api-key`.
+2. Router valida payload y define timestamp UTC.
+3. Router ejecuta `_persist_ingest(...)` en thread.
+4. `ingest_service.ingest(...)`:
+   - detecta cambios de estado,
+   - cierra/abre eventos en `scada_event`,
+   - flushea minutos cerrados en `scada_minute`.
+5. Router actualiza `RealtimeStateStore`.
+6. Router hace `ws_manager.broadcast(...)` con `tick_payload`.
 
-**Body (JSON):**
-```python
-{
-  "lagoon_id": str,              
-  "ts": str | None,              
-  "tags": dict[str, Any]         
-}
-```
+### Flujo de lectura REST
 
-**Ejemplos:**
+- `last-minute`: ultimo bucket de `scada_minute`.
+- `current`: ultimo valor por tag para laguna.
+- `history`: vista continua o fallback, agrupa en `series`.
+- `pump-events/last-3`: lee `vw_scada_last_3_pump_actions`.
 
-```bash
-# Con timestamp especificado
-curl -X POST http://localhost:8000/ingest/scada \
-  -H "Content-Type: application/json" \
-  -d '{
-    "lagoon_id": "costa_del_lago",
-    "ts": "2026-02-09T14:30:45Z",
-    "tags": {
-      "bomba_1": true,
-      "temperatura": 28.5,
-      "presion": 2.3
-    }
-  }'
+### Flujo websocket
 
-# Sin timestamp (usa hora actual)
-curl -X POST http://localhost:8000/ingest/scada \
-  -H "Content-Type: application/json" \
-  -d '{
-    "lagoon_id": "costa_del_lago",
-    "tags": {
-      "bomba_1": false
-    }
-  }'
-```
-
-**Respuesta:** 
-```json
-{"ok": true}
-```
-
-**Errores:**
-- `422` - Payload inválido
-- `500` - Error al guardar en BD
+1. Cliente abre WS con token y lagoon.
+2. Se valida permiso `can_view` para lagoon.
+3. Servidor envia `snapshot` inicial.
+4. En cada ingest se envia `tick` a conexiones de esa laguna.
 
 ---
 
-### 3. Consultas SCADA / Lectura de Estado
+## Modelos y vistas de datos
 
-#### Lectura en Memoria / Último Minuto
-- `GET /scada/{lagoon_id}/current`  → devuelve snapshot actual almacenado en RealtimeStateStore
-- `GET /scada/{lagoon_id}/last-minute` → últimos valores agregados en la tabla `scada_minute` (bucket por minuto)
+### Tablas principales
 
-#### Historial (BD)
-**Endpoint:** `GET /scada/history/{resolution}`
+- `lagoons`
+  - `id`, `name`, `plc_type`, `timezone`, `ip`, `scada_layout`, `product_type`
+- `scada_event`
+  - `id`, `lagoon_id`, `tag_id`, `state`, `previous_state`, `start_ts`, `end_ts`, `duration_sec`
+- `scada_minute`
+  - `id`, `lagoon_id`, `tag_id`, `bucket`, `state`, `value_num`, `value_bool`
+- `users`, `roles`, `user_roles`
 
-Parámetros de query:
-```
-# resolution va en el path: /scada/history/hourly|daily|weekly
-lagoon_id=<id>                  # laguna solicitada
-start_date=<ISO>                # fecha inicial (incluye)
-end_date=<ISO>                  # fecha final (incluye)
-tags=tag1,tag2,... (opcional)   # filtrar etiquetas específicas
-```
+### Vistas y objetos usados por consultas
 
-**Respuesta:** objeto con campos `lagoon_id`, `resolution`, `source`, `series` (lista de {tag, points}).
-
-[Ver `app/scada/history/router.py` para la implementación detallada]
-
-#### Eventos de bombas (últimos 3)
-**Endpoint:** `GET /scada/{lagoon_id}/pump-events/last-3`
-
-Consulta operativa:
-- Lee desde la vista `vw_scada_last_3_pump_actions`.
-- Filtra por `lagoon_id`.
-- Devuelve `events[]` con `tag_id`, `tag_label`, `start_local`.
-
-Uso:
-- Frontend para panel de actividad reciente de bombas.
-- No reemplaza `pump_last_on`; es un endpoint de lectura histórica corta.
-
-#### Vistas continuas para histórico
-
-Script de infraestructura:
-- `scripts/sql/create_scada_continuous_aggregates.sql`
-
-Vistas creadas:
+- `vw_scada_last_3_pump_actions`
+- `vw_user_lagoons`
 - `public.scada_minute_hourly`
 - `public.scada_minute_daily`
 - `public.scada_minute_weekly`
 
-Estrategia de consulta en backend:
-- Si existe vista: usa vista continua (`source="view"`).
-- Si no existe: usa `time_bucket` directo sobre `scada_minute` (`source="table"`).
+Scripts relevantes:
+
+- `scripts/sql/create_rbac_tables.sql`
+- `scripts/seed_roles.py`
+- `scripts/sql/create_scada_continuous_aggregates.sql`
 
 ---
 
-## 🔌 Sistema WebSocket (Real-time)
+## Configuracion operativa
 
-### Conexión WebSocket
+Variables requeridas:
 
-**Endpoint:** `WebSocket /ws/scada?lagoon_id=<id>`
+- `DATABASE_URL`
+- `COLLECTOR_API_KEY`
+- `JWT_SECRET_KEY`
 
-```
-# Ejemplo de URL
-ws://localhost:8000/ws/scada?lagoon_id=costa_del_lago
-```
+Variables comunes:
 
-### Flujo de Conexión
+- `JWT_ALGORITHM`
+- `JWT_ACCESS_TOKEN_EXPIRE_MINUTES`
+- `INGEST_TIMEOUT_SEC`
+- `SCADA_WATCHDOG_*`
 
-#### 1. **Conectarse**
+CORS permitidos por defecto:
 
-```javascript
-// Cliente JavaScript
-const ws = new WebSocket(
-  'ws://localhost:8000/ws/scada?lagoon_id=costa_del_lago'
-);
-
-ws.onopen = () => console.log('Conectado');
-ws.onmessage = (evt) => console.log('Datos:', JSON.parse(evt.data));
-ws.onclose = () => console.log('Desconectado');
-ws.onerror = (evt) => console.error('Error:', evt);
-```
-
-#### 2. **Recibir Snapshot Inicial**
-
-Inmediatamente después de conectarse:
-
-```json
-{
-  "type": "snapshot",
-  "lagoon_id": "costa_del_lago",
-  "ts": "2026-02-09T14:30:00Z",
-  "tags": {
-    "bomba_1": true,
-    "temperatura": 28.5
-  },
-  "pump_last_on": {
-    "bomba_1": "2026-02-09T14:29:15Z"
-  },
-  "start_ts": {
-    "costa_del_lago": "2026-02-09T14:29:15Z"
-  }
-}
-```
-
-**Uso:** Inicializar UI con estado actual
-
-#### 3. **Recibir Ticks (Actualizaciones)**
-
-Cuando llega un nuevo `POST /ingest/scada`:
-
-```json
-{
-  "type": "tick",
-  "lagoon_id": "costa_del_lago",
-  "ts": "2026-02-09T14:31:15Z",
-  "tags": {
-    "bomba_1": true,
-    "temperatura": 28.6
-  },
-  "pump_last_on": {
-    "bomba_1": "2026-02-09T14:30:45Z"
-  },
-  "start_ts": {
-    "costa_del_lago": "2026-02-09T14:30:45Z"
-  }
-}
-```
-
-**Uso:** Actualizar UI en tiempo real
-
-#### 4. **Desconectar**
-
-```javascript
-ws.close();
-```
-
-El servidor automáticamente remueve la conexión de su registro.
-
-### Características WebSocket
-
-| Feature | Descripción |
-|---------|-------------|
-| **Protocol** | RFC 6455 (WebSocket estándar) |
-| **Per-lagoon** | Cada laguna tiene su propio broadcast list |
-| **Auto-cleanup** | Desconexiones muertas se detectan automáticamente |
-| **Thread-safe** | Usa asyncio.Lock para evitar race conditions |
-| **No bidireccional** | Solo servidor → cliente |
+- `http://192.168.1.22`
+- `http://localhost:5173`
+- `http://localhost:3000`
+- `http://localhost:5174`
+- `http://localhost:8080`
 
 ---
 
-## 📊 Modelos de Base de Datos
+## Referencias cruzadas
 
-### 1. **ScadaEvent** (Eventos de Bombas)
-
-Tabla: `scada_event`
-
-```sql
-id              UUID PRIMARY KEY
-lagoon_id       VARCHAR(64) FK → lagoons.id
-tag_id          VARCHAR(64) INDEX
-tag_label       VARCHAR(128)
-start_ts        TIMESTAMP WITH TIMEZONE
-end_ts          TIMESTAMP WITH TIMEZONE (NULL si abierto)
-created_at      TIMESTAMP WITH TIMEZONE
-```
-
-**Características:**
-- ✅ Eventos de ON/OFF de bombas
-- ✅ `end_ts` = NULL → Evento abierto (bomba activa)
-- ✅ Índice especial en eventos abiertos: `ix_scada_event_open`
-
-**Ejemplo:**
-```
-| id | lag | tag | start_ts | end_ts | created_at |
-|----|-----|-----|----------|--------|-----------|
-| 1  | cl  | b1  | 14:30:00 | 14:45:00 | ... | (ciclo completo)
-| 2  | cl  | b1  | 14:50:00 | NULL   | ... | (abierto, ON)
-```
-
----
-
-### 2. **ScadaMinute** (Agregados por Minuto)
-
-Tabla: `scada_minute`
-
-```sql
-id              BIGINT PRIMARY KEY AUTOINCREMENT
-lagoon_id       VARCHAR(64) FK → lagoons.id
-tag_id          VARCHAR(64)
-bucket          TIMESTAMP WITH TIMEZONE (truncado a minuto)
-value_num       FLOAT (NULL si es booleano)
-value_bool      BOOLEAN (NULL si es número)
-created_at      TIMESTAMP WITH TIMEZONE
-updated_at      TIMESTAMP WITH TIMEZONE
-```
-
-**Índices:**
-```
-UNIQUE (lagoon_id, tag_id, bucket)    ← Evita duplicados
-INDEX (bucket)
-INDEX (lagoon_id)
-```
-
-**Características:**
-- Una fila por minuto/tag
-- Guarda el **último valor** del minuto
-- Optimizado para queries de histórico
-- ON CONFLICT → UPDATE (actualizar si existe)
-
-**Ejemplo:**
-```
-| id | lagoon_id | tag_id | bucket | value_num | value_bool | updated_at |
-|----|-----------|--------|--------|-----------|-----------|-----------|
-| 1  | cl | temp | 14:30:00 | 28.5 | NULL | 2026-02-09 14:30:45 |
-| 2  | cl | bomba | 14:30:00 | NULL | true | 2026-02-09 14:30:45 |
-| 3  | cl | temp | 14:31:00 | 28.6 | NULL | 2026-02-09 14:31:15 |
-```
-
----
-
-## 🗄️ Estado y Sincronización
-
-### RealtimeStateStore (Memoria)
-
-**Contenidos:**
-
-```python
-{
-  "tags": {
-    "costa_del_lago": {
-      "bomba_1": True,
-      "temperatura": 28.5,
-      "presion": 2.3
-    }
-  },
-  "last_ts": {
-    "costa_del_lago": "2026-02-09T14:30:45Z"
-  },
-  "pump_last_on": {
-    "costa_del_lago": {
-      "bomba_1": "2026-02-09T14:30:45Z"
-    }
-  },
-  "start_ts": {
-    "costa_del_lago": "2026-02-09T14:30:45Z"
-  }
-}
-```
-
-**Precarga al BOOT:**
-
-```python
-# main.py - lifespan startup
-db = SessionLocal()
-last_start_by_pump = ScadaEventRepository.get_last_start_ts_by_lagoon(
-  db, lagoon_id="costa_del_lago"
-)
-app.state.state_store.pump_last_on["costa_del_lago"] = last_start_by_pump
-```
-
-Query:
-```sql
-SELECT tag_id, MAX(start_ts) as start_ts
-FROM scada_event
-WHERE lagoon_id = 'costa_del_lago'
-GROUP BY tag_id
-```
-
-### Sincronización en Tiempo Real
-
-```
-Ingest → RealtimeStateStore ← WebSocket payload
-         ↓
-         PostgreSQL (persistencia)
-```
-
-**Garantías:**
-- Cada POST /ingest/scada actualiza estado + BD + WS
-- RealtimeStateStore siempre refleja el último ingest
-- Reconexión WS recibe snapshot actualizado
-
----
-
-## 📈 Diagramas de Arquitectura
-
-### Diagrama 1: Componentes Principales
-
-```
-┌─────────────────────────────────────────────────────┐
-│         Frontend (React/Vue)                        │
-│  ┌────────────────┐          ┌──────────────────┐  │
-│  │ HTTP Client    │          │ WebSocket Client │  │
-│  └────────┬───────┘          └────────┬─────────┘  │
-└───────────┼──────────────────────────┼─────────────┘
-            │ POST /ingest/scada       │ ws://...
-            ▼                          ▼
-┌─────────────────────────────────────────────────────┐
-│           FastAPI Backend (Python)                  │
-│                                                     │
-│  ┌──────────────────┐    ┌───────────────────────┐ │
-│  │ IngestRouter     │    │ WebSocket Router      │ │
-│  │ POST /ingest     │    │ /ws/scada             │ │
-│  └────────┬─────────┘    └──────────┬────────────┘ │
-│           │                         │               │
-│           ├─────────┬───────────────┤               │
-│           │         │               │               │
-│           ▼         ▼               ▼               │
-│  ┌──────────────────────────────────────────────┐  │
-│  │  RealtimeStateStore (Singleton)              │  │
-│  │  - tags: {lagoon → {...}}                    │  │
-│  │  - last_ts, pump_last_on, start_ts           │  │
-│  └──────────────────────────────────────────────┘  │
-│                      ↑                              │
-│                      │                              │
-│  ┌──────────────────────────────────────────────┐  │
-│  │  IngestService                               │  │
-│  │  - Bufferizado por minutos                   │  │
-│  │  - Procesamiento de eventos                  │  │
-│  │  - Detección ON/OFF                          │  │
-│  └────────────┬─────────────────────────────────┘  │
-│               │                                     │
-│               │ (INSERT/UPDATE)                    │
-│               ▼                                     │
-│  ┌──────────────────────────────────────────────┐  │
-│  │  WebSocketManager (Singleton)                │  │
-│  │  - Conexiones por laguna                     │  │
-│  │  - Broadcast de ticks                        │  │
-│  └──────────────────────────────────────────────┘  │
-│               │                                     │
-│               └─────────────┬──────────┬─────────   │
-└────────────────────────────┼──────────┼───────────┘
-                             │          │
-                             ▼          ▼
-                        ┌─────────────────┐
-                        │   PostgreSQL    │
-                        │                 │
-                        │ ▪ scada_event   │
-                        │ ▪ scada_minute  │
-                        │ ▪ lagoons       │
-                        └─────────────────┘
-```
-
-### Diagrama 2: Flujo de Ingest
-
-```
-POST /ingest/scada {lagoon, ts, tags}
-    │
-    ▼
-┌──────────────────────────────────────┐
-│ [1] Parsear payload                  │
-│     - timestamp → ISO 8601 UTC       │
-└─────────────┬────────────────────────┘
-              │
-              ▼
-┌──────────────────────────────────────┐
-│ [2] RealtimeStateStore.update()      │
-│     - Actualizar tags                │
-│     - Actualizar pump_last_on        │
-│     - Detectar cambios bool          │
-└─────────────┬────────────────────────┘
-              │
-              ▼
-┌──────────────────────────────────────┐
-│ [3] IngestService.ingest()           │
-│     ├─ Bufferizar datos de minuto    │
-│     ├─ Detectar cambios de evento    │
-│     │  ├─ False→True: INSERT evento  │
-│     │  └─ True→False: UPDATE evento  │
-│     └─ Flush minutos cerrados        │
-│        └─ INSERT/UPDATE ScadaMinute  │
-└─────────────┬────────────────────────┘
-              │
-              ▼
-         PostgreSQL COMMIT
-              │
-              ▼
-┌──────────────────────────────────────┐
-│ [4] WebSocketManager.broadcast()     │
-│     - Enviar tick_payload a clientes │
-└─────────────┬────────────────────────┘
-              │
-              ▼
-        200 OK Response
-```
-
-### Diagrama 3: Evento Booleano Completo
-
-```
-Ingest #1: "bomba_1" = true (estado previo: false/null)
-    │
-    ├─ Detectar: False/null → True
-    │
-    └─ INSERT INTO scada_event
-       ├─ id: <UUID>
-       ├─ lagoon_id: "costa_del_lago"
-       ├─ tag_id: "bomba_1"
-       ├─ start_ts: 2026-02-09 14:30:45Z
-       ├─ end_ts: NULL  ← 🔴 ABIERTO (ACTIVO)
-       └─ created_at: NOW()
-
-       _open_event_id[("costa_del_lago", "bomba_1")] = <id>
-
-             Tiempo transcurrido...
-
-Ingest #5: "bomba_1" = false (estado previo: true)
-    │
-    ├─ Detectar: True → False
-    │
-    └─ UPDATE scada_event
-       WHERE id = _open_event_id[("costa_del_lago", "bomba_1")]
-       SET end_ts = 2026-02-09 14:45:15Z  ← CERRADO
-
-       Evento completo:
-       ├─ Duración: 14:30:45 → 14:45:15 (≈14.5 min)
-       └─ Estado final: Completado
-```
----
-
-### CORS
-
-```python
-# Configurado en main.py
-allow_origins = [
-  "http://192.168.1.22",
-  "http://localhost:5173",  # Vite dev
-  "http://localhost:3000",  # React dev
-  "http://localhost:8080",
-]
-```
-
-Agregar origins según necesidad.
-
----
-
-## Referencias y Recursos
-
-- **FastAPI Docs:** https://fastapi.tiangolo.com/
-- **SQLAlchemy ORM:** https://docs.sqlalchemy.org/
-- **WebSocket RFC 6455:** https://tools.ietf.org/html/rfc6455
-- **ISO 8601 (Timestamps):** https://en.wikipedia.org/wiki/ISO_8601
-
----
-
-## 🎓 Preguntas Frecuentes (FAQ)
-
-### P1: ¿Por qué el timestamp va como string?
-
-**R:** ISO 8601 es un estándar internacional y es agnóstico de zona horaria cuando incluye `Z` (UTC). El backend convierte a `datetime` de Python.
-
-### P2: ¿Qué pasa si envío dos requests SIMULTÁNEAMENTE?
-
-**R:** El `threading.Lock` en `IngestService` serializa el acceso. El segundo espera al primero.
-
-### P3: ¿Puedo particionar scada_minute por tamaño?
-
-**R:** Sí. PostgreSQL table partitioning by range (fecha) optimizaría queries históricas. Considerar para > 100M rows.
-
-### P4: ¿El WebSocket es obligatorio para el frontend?
-
-**R:** No. El frontend puede hacer polling a un endpoint REST `GET /scada/last` cada X segundos. Pero WebSocket es más eficiente.
-
-### P5: ¿Cómo escalo a múltiples servidores?
-
-**R:** 
-- ❌ RealtimeStateStore + WebSocketManager son en-memory → necesita Redis/RabbitMQ
-- ✅ IngestService + BD funcionan distribuidas
-- Futura arquitectura: Queue centralizada + múltiples Workers
-
----
-
-**Documento creado:** 2026-02-09  
-**Autor:** Equipo de Desarrollo Crystal Lagoons  
-**Versión:** 1.1
+- [FLUJO_INSERCION.md](./FLUJO_INSERCION.md)
+- [GUIA_TECNICA_DESARROLLO.md](./GUIA_TECNICA_DESARROLLO.md)
+- [DIAGRAMAS_FLUJOS.md](./DIAGRAMAS_FLUJOS.md)
+- [CHANGELOG.md](./CHANGELOG.md)

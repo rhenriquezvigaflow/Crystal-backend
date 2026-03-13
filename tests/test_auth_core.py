@@ -11,12 +11,19 @@ from app.auth.auth import (
     login,
 )
 from app.auth.dependencies import decode_access_token
-from app.auth.model import Role
+
+
+class _RoleStub:
+    def __init__(self, name: str):
+        self.name = name
 
 
 class _QueryStub:
     def __init__(self, user):
         self._user = user
+
+    def options(self, *args, **kwargs):
+        return self
 
     def filter(self, *args, **kwargs):
         return self
@@ -38,13 +45,14 @@ class _UserStub:
         self,
         email: str,
         password_hash: str,
-        role: str = Role.ADMIN.value,
+        roles: list[str] | None = None,
         is_active: bool = True,
     ):
         self.id = uuid.uuid4()
         self.email = email
         self.password_hash = password_hash
-        self.role = role
+        role_names = ["AdminCrystal"] if roles is None else roles
+        self.roles = [_RoleStub(name) for name in role_names]
         self.is_active = is_active
 
 
@@ -62,21 +70,23 @@ class TestAuthCore(unittest.TestCase):
 
         self.assertIn("access_token", response)
         self.assertEqual(response["token_type"], "bearer")
+        self.assertEqual(response["user"]["roles"], ["AdminCrystal"])
 
     def test_token_decode_contains_subject(self):
         token = create_access_token(
-            {"sub": "user-1", "role": Role.ADMIN.value}
+            {"sub": "user-1", "roles": ["AdminCrystal"]}
         )
         payload = decode_access_token(token)
         self.assertEqual(payload["sub"], "user-1")
+        self.assertEqual(payload["roles"], ["AdminCrystal"])
 
-    def test_login_rejects_non_admin_role(self):
+    def test_login_rejects_user_without_roles(self):
         email = "demo@example.com"
         raw_password = "Secret123!"
         user = _UserStub(
             email=email,
             password_hash=hash_password(raw_password),
-            role=Role.USER.value,
+            roles=[],
         )
         db = _DBStub(user)
 

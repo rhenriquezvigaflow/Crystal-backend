@@ -1,35 +1,32 @@
 # Documentacion Crystal Lagoons Backend
 
-**Version de documentacion:** `1.1`  
-**Ultima actualizacion:** `2026-02-25`
+**Version de documentacion:** `1.2`
+**Ultima actualizacion:** `2026-03-13`
 
 ---
 
 ## Punto de entrada recomendado
 
-1. [ONE_PAGE_SUMMARY.md](./ONE_PAGE_SUMMARY.md) - Vista ejecutiva en 1 pagina.
-2. [ARQUITECTURA_Y_FLUJO.md](./ARQUITECTURA_Y_FLUJO.md) - Arquitectura y contratos principales.
-3. [FLUJO_INSERCION.md](./FLUJO_INSERCION.md) - Flujo operativo de ingest, WS y persistencia.
-4. [GUIA_TECNICA_DESARROLLO.md](./GUIA_TECNICA_DESARROLLO.md) - Guia practica para implementar cambios.
-5. [DIAGRAMAS_FLUJOS.md](./DIAGRAMAS_FLUJOS.md) - Diagramas ASCII de flujos y runtime.
-6. [ONBOARDING.md](./ONBOARDING.md) - Ruta guiada para nuevos integrantes.
+1. [ONE_PAGE_SUMMARY.md](./ONE_PAGE_SUMMARY.md) - Vista rapida del sistema actual.
+2. [ARQUITECTURA_Y_FLUJO.md](./ARQUITECTURA_Y_FLUJO.md) - Arquitectura, seguridad y contratos.
+3. [FLUJO_INSERCION.md](./FLUJO_INSERCION.md) - Flujo operacional de ingest, estado y websocket.
+4. [GUIA_TECNICA_DESARROLLO.md](./GUIA_TECNICA_DESARROLLO.md) - Setup local, ejemplos y troubleshooting.
+5. [DIAGRAMAS_FLUJOS.md](./DIAGRAMAS_FLUJOS.md) - Diagramas ASCII simplificados.
+6. [ONBOARDING.md](./ONBOARDING.md) - Ruta de onboarding tecnico.
 
 ---
 
-## Cambios v1.1 (2026-02-25)
+## Cambios v1.2 (2026-03-13)
 
-Revisados y registrados en documentacion:
+Actualizado en documentacion:
 
-- Endpoint de eventos de bombas:
-  - `GET /scada/{lagoon_id}/pump-events/last-3`
-  - Fuente: `vw_scada_last_3_pump_actions` filtrada por `lagoon_id`.
-- Historico con agregados continuos:
-  - Script: `scripts/sql/create_scada_continuous_aggregates.sql`
-  - Vistas: `public.scada_minute_hourly`, `public.scada_minute_daily`, `public.scada_minute_weekly`
-  - Politicas: `add_continuous_aggregate_policy(...)`
-- Flujo de historico documentado:
-  - Primero consulta vistas continuas.
-  - Si no existen, usa fallback sobre `scada_minute`.
+- Seguridad de ingest por `x-api-key`.
+- Flujo de login por `POST /auth/login` y uso de JWT bearer.
+- RBAC por roles y permisos por laguna (`can_view`, `can_edit`, `can_control`).
+- Endpoints producto-especificos (`/api/crystal/*`, `/api/small/*`).
+- WebSockets autenticados con token y control por laguna.
+- Setup de BD con tablas RBAC (`create_rbac_tables.sql`) y seed de roles.
+- Correccion de codificacion de documentos.
 
 Detalle completo:
 - [CHANGELOG.md](./CHANGELOG.md)
@@ -38,21 +35,64 @@ Detalle completo:
 
 ## Endpoints documentados (estado actual)
 
-- `POST /ingest/scada`
-- `GET /scada/history/{resolution}`
-- `GET /scada/{lagoon_id}/pump-events/last-3`
-- `WS /ws/scada?lagoon_id=<lagoon_id>`
+Publicos:
 
-Nota:
-- El router de historial usa `resolution` como segmento de ruta (`hourly|daily|weekly`).
-- El websocket activo en `app/main.py` usa query param `lagoon_id`.
+- `GET /health`
+- `POST /auth/login`
+
+Ingest:
+
+- `POST /ingest/scada` (requiere `x-api-key`)
+
+SCADA general (bearer + rol de lectura):
+
+- `GET /scada/{lagoon_id}/last-minute`
+- `GET /scada/{lagoon_id}/current`
+- `GET /scada/{lagoon_id}/pump-events/last-3`
+- `GET /scada/history/{resolution}`
+
+RBAC por permisos de laguna:
+
+- `GET /lagoons`
+- `PUT /lagoons/{id}`
+- `POST /control/pump`
+
+Producto Crystal:
+
+- `GET /api/crystal/lagoons`
+- `GET /api/crystal/dashboard`
+- `GET /api/crystal/lagoons/{lagoon_id}/last-minute`
+- `GET /api/crystal/lagoons/{lagoon_id}/current`
+- `GET /api/crystal/lagoons/{lagoon_id}/pump-events/last-3`
+- `GET /api/crystal/history`
+- `GET|PUT|DELETE /api/crystal/layout`
+- `GET|PUT|DELETE /api/crystal/tags`
+
+Producto Small:
+
+- `GET /api/small/lagoons`
+- `GET /api/small/dashboard`
+- `GET /api/small/lagoons/{lagoon_id}/last-minute`
+- `GET /api/small/lagoons/{lagoon_id}/current`
+- `GET /api/small/lagoons/{lagoon_id}/pump-events/last-3`
+- `GET /api/small/history`
+- `POST|PUT /api/small/control`
+- `GET|POST|DELETE /api/small/chemicals`
+
+WebSocket:
+
+- `WS /ws/scada?lagoon_id=<id>&token=<jwt>`
+- `WS /ws/scada/{lagoon_id}?token=<jwt>`
+- `WS /ws/crystal/{lagoon_id}?token=<jwt>`
+- `WS /ws/small/{lagoon_id}?token=<jwt>`
 
 ---
 
-## Checklist rapido de sincronia doc-codigo
+## Checklist rapido doc-codigo
 
-- [x] Nuevo endpoint de eventos registrado en arquitectura, guia tecnica y resumen.
-- [x] Script SQL de agregados continuos registrado en setup y onboarding.
-- [x] Flujo de historico (view/fallback) registrado en arquitectura y flujo.
-- [x] Version documental incrementada a `1.1`.
-
+- [x] Payload de ingest alineado (`timestamp` + `x-api-key`).
+- [x] Autenticacion JWT y roles documentados.
+- [x] RBAC de permisos por laguna documentado.
+- [x] APIs Crystal y Small incluidas.
+- [x] WebSockets con seguridad documentados.
+- [x] Version documental incrementada a `1.2`.
