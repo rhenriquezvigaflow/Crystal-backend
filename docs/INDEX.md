@@ -1,6 +1,6 @@
 # Documentacion Crystal Lagoons Backend
 
-**Version de documentacion:** `1.3.3`
+**Version de documentacion:** `1.3.4`
 **Ultima actualizacion:** `2026-04-07`
 
 ---
@@ -16,10 +16,11 @@
 7. [README_ALARM_THRESHOLDS_API.md](./README_ALARM_THRESHOLDS_API.md) - Contrato vigente de umbrales PT/FIT (`GET /view` + `PUT`).
 8. [ALARMAS_ACTUALES_Y_LOGICA.md](./ALARMAS_ACTUALES_Y_LOGICA.md) - Estado real del motor de alarmas y reglas operativas.
 9. [PROMPT_FRONT_ALARMAS_PT_FIT.md](./PROMPT_FRONT_ALARMAS_PT_FIT.md) - Prompt frontend actualizado al contrato actual.
+10. [ARQUITECTURA_END_TO_END_COLLECTOR_BACKEND.md](./ARQUITECTURA_END_TO_END_COLLECTOR_BACKEND.md) - Arquitectura completa de punta a punta (collector -> backend -> APIs/WS).
 
 ---
 
-## Cambios v1.3.3 (2026-04-07)
+## Cambios v1.3.4 (2026-04-07)
 
 Actualizado en documentacion:
 
@@ -32,6 +33,8 @@ Actualizado en documentacion:
   - `source` en vista: `configured|candidate`.
 - Prompt frontend de alarmas alineado a implementacion actual.
 - Registro de ajuste de migracion SQL para recreacion de vista sin error `42P16`.
+- Nuevo documento end-to-end para onboarding tecnico:
+  - `ARQUITECTURA_END_TO_END_COLLECTOR_BACKEND.md`
 
 Detalle completo:
 - [CHANGELOG.md](./CHANGELOG.md)
@@ -101,4 +104,5 @@ WebSocket:
 - [x] APIs Crystal y Small incluidas.
 - [x] WebSockets con seguridad documentados.
 - [x] Contrato PT/FIT vigente (`GET /view` + `PUT`) documentado.
-- [x] Version documental incrementada a `1.3.3`.
+- [x] Arquitectura end-to-end collector -> backend documentada.
+- [x] Version documental incrementada a `1.3.4`.

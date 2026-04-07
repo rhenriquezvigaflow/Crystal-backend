@@ -1,5 +1,17 @@
 # Changelog de Documentacion
 
+## v1.3.4 - 2026-04-07
+
+Cambios documentados en esta version:
+
+- Nuevo documento de arquitectura completa para onboarding:
+  - `docs/ARQUITECTURA_END_TO_END_COLLECTOR_BACKEND.md`
+- Cubre flujo de punta a punta:
+  - collector (lectura PLC, cola, sender, spool)
+  - backend (ingest, estado realtime, persistencia, alarmas)
+  - APIs REST, WebSocket, seguridad y modelo de datos.
+- `INDEX.md` actualizado para enlazar este documento como entrada oficial.
+
 ## v1.3.3 - 2026-04-07
 
 Cambios documentados en esta version:
