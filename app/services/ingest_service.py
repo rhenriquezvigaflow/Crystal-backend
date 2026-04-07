@@ -6,8 +6,8 @@ from threading import Lock
 
 from sqlalchemy.orm import Session
 from sqlalchemy.dialects.postgresql import insert
-from datetime import datetime, timezone
 
+from app.core.logging import get_logger
 from app.models.scada_minute import ScadaMinute
 from app.models.scada_event import ScadaEvent
 from app.scada.value_codec import (
@@ -35,6 +35,8 @@ _runtime_metrics = {
     "last_event_count": 0,
 }
 
+logger = get_logger("services.ingest")
+
 
 # =========================================================
 # PUBLIC HELPERS
@@ -59,7 +61,10 @@ def reset_runtime_state(
 ) -> bool:
     acquired = _lock.acquire(timeout=lock_timeout_sec)
     if not acquired:
-        print(f"[INGEST RESET SKIPPED] reason={reason} lock busy")
+        logger.warning(
+            "[INGEST RESET SKIPPED] reason=%s lock=busy",
+            reason,
+        )
         return False
 
     try:
@@ -69,10 +74,11 @@ def reset_runtime_state(
         _minute_buffer.clear()
         _last_state.clear()
 
-        print(
-            f"[INGEST RESET] reason={reason} "
-            f"cleared minute_buffer={minute_keys} "
-            f"last_state={state_keys}"
+        logger.info(
+            "[INGEST RESET] reason=%s cleared minute_buffer=%s last_state=%s",
+            reason,
+            minute_keys,
+            state_keys,
         )
         return True
 
@@ -144,87 +150,84 @@ def ingest(
 
 
 
-    try:
+    for tag_id, previous, value in detected_events:
 
-        for tag_id, previous, value in detected_events:
+        logger.info(
+            "[EVENT DETECTED] lagoon_id=%s tag_id=%s previous=%s current=%s",
+            lagoon_id,
+            tag_id,
+            previous,
+            value,
+        )
 
-            print(
-                f"[EVENT DETECTED] {lagoon_id} "
-                f"{tag_id} {previous} -> {value}"
+        open_event = (
+            db.query(ScadaEvent)
+            .filter(
+                ScadaEvent.lagoon_id == lagoon_id,
+                ScadaEvent.tag_id == tag_id,
+                ScadaEvent.end_ts.is_(None),
+            )
+            .order_by(ScadaEvent.start_ts.desc())
+            .first()
+        )
+
+        if open_event:
+            duration = int(
+                (ts - open_event.start_ts).total_seconds()
+            )
+            open_event.end_ts = ts
+            open_event.duration_sec = duration
+
+            logger.info(
+                "[EVENT CLOSED] lagoon_id=%s tag_id=%s duration_sec=%s",
+                lagoon_id,
+                tag_id,
+                duration,
             )
 
-            open_event = (
-                db.query(ScadaEvent)
-                .filter(
-                    ScadaEvent.lagoon_id == lagoon_id,
-                    ScadaEvent.tag_id == tag_id,
-                    ScadaEvent.end_ts.is_(None),
-                )
-                .order_by(ScadaEvent.start_ts.desc())
-                .first()
-            )
+        new_event = ScadaEvent(
+            lagoon_id=lagoon_id,
+            tag_id=tag_id,
+            tag_label=tag_id,
+            start_ts=ts,
+            previous_state=int(previous),
+            state=int(value),
+            alert_type="STATE_CHANGE",
+        )
 
-            if open_event:
-                duration = int(
-                    (ts - open_event.start_ts).total_seconds()
-                )
-                open_event.end_ts = ts
-                open_event.duration_sec = duration
+        db.add(new_event)
 
-                print(
-                    f"[EVENT CLOSED] {tag_id} "
-                    f"duration={duration}s"
-                )
+        print(
+            f"[EVENT INSERTED] "
+            f"{lagoon_id} {tag_id}"
+        )
 
-            new_event = ScadaEvent(
-                lagoon_id=lagoon_id,
-                tag_id=tag_id,
-                tag_label=tag_id,
-                start_ts=ts,
-                previous_state=int(previous),
-                state=int(value),
-                alert_type="STATE_CHANGE",
-            )
+    if flush_rows:
 
-            db.add(new_event)
+        stmt = insert(ScadaMinute).values(flush_rows)
 
-            print(
-                f"[EVENT INSERTED] "
-                f"{lagoon_id} {tag_id}"
-            )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["lagoon_id", "tag_id", "bucket"],
+            set_={
+                "state": stmt.excluded.state,
+                "value_num": stmt.excluded.value_num,
+                "value_bool": stmt.excluded.value_bool,
+            },
+        )
 
-        if flush_rows:
+        db.execute(stmt)
 
-            stmt = insert(ScadaMinute).values(flush_rows)
+        print(
+            f"[BATCH MINUTE UPSERT] "
+            f"utc={datetime.now(timezone.utc).isoformat()} "
+            f"lagoon={lagoon_id} "
+            f"bucket_utc={bucket.isoformat()} "
+            f"rows={len(flush_rows)} "
+            f"events={len(detected_events)}"
+        )
 
-            stmt = stmt.on_conflict_do_update(
-                index_elements=["lagoon_id", "tag_id", "bucket"],
-                set_={
-                    "state": stmt.excluded.state,
-                    "value_num": stmt.excluded.value_num,
-                    "value_bool": stmt.excluded.value_bool,
-                },
-            )
-
-            db.execute(stmt)
-
-            print(
-                f"[BATCH MINUTE UPSERT] "
-                f"utc={datetime.now(timezone.utc).isoformat()} "
-                f"lagoon={lagoon_id} "
-                f"bucket_utc={bucket.isoformat()} "
-                f"rows={len(flush_rows)} "
-                f"events={len(detected_events)}"
-            )
-
-        # -------------------------
-        _runtime_metrics["last_ingest_utc"] = datetime.now(timezone.utc)
-        _runtime_metrics["last_lagoon"] = lagoon_id
-        _runtime_metrics["last_minute_rows"] = len(flush_rows)
-        _runtime_metrics["last_event_count"] = len(detected_events)
-
-        db.commit()
-
-    except Exception:
-        db.rollback()
-        raise
+    # -------------------------
+    _runtime_metrics["last_ingest_utc"] = datetime.now(timezone.utc)
+    _runtime_metrics["last_lagoon"] = lagoon_id
+    _runtime_metrics["last_minute_rows"] = len(flush_rows)
+    _runtime_metrics["last_event_count"] = len(detected_events)

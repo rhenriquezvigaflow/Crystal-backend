@@ -9,6 +9,7 @@ from typing import Optional
 from sqlalchemy import func, text
 
 from app.db.session import SessionLocal, engine
+from app.core.logging import get_logger
 from app.models.scada_event import ScadaEvent
 from app.models.scada_minute import ScadaMinute
 from app.core.config import settings
@@ -16,6 +17,8 @@ from app.services.ingest_service import (
     reset_runtime_state,
     get_runtime_metrics,
 )
+
+logger = get_logger("monitor.scada_watchdog")
 
 
 @dataclass
@@ -52,17 +55,17 @@ class ScadaStallWatchdog:
 
     async def start(self) -> None:
         if not self.enabled:
-            print("[WATCHDOG] disabled")
+            logger.info("[WATCHDOG] disabled")
             return
 
         self._task = asyncio.create_task(self._run())
 
-        print(
-            "[WATCHDOG] started "
-            f"timeout={self.timeout_sec}s "
-            f"interval={self.check_interval_sec}s "
-            f"startup_grace={self.startup_grace_sec}s "
-            f"hard_restart={self.hard_restart}"
+        logger.info(
+            "[WATCHDOG] started timeout_sec=%s interval_sec=%s startup_grace_sec=%s hard_restart=%s",
+            self.timeout_sec,
+            self.check_interval_sec,
+            self.startup_grace_sec,
+            self.hard_restart,
         )
 
     async def stop(self) -> None:
@@ -73,7 +76,7 @@ class ScadaStallWatchdog:
                 await self._task
             except asyncio.CancelledError:
                 pass
-        print("[WATCHDOG] stopped")
+        logger.info("[WATCHDOG] stopped")
 
     async def _run(self) -> None:
         while not self._stop.is_set():
@@ -95,7 +98,7 @@ class ScadaStallWatchdog:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                print(f"[WATCHDOG ERROR] {exc}")
+                logger.exception("[WATCHDOG ERROR] %s", exc)
 
             await self._sleep_interval()
 
@@ -184,13 +187,15 @@ class ScadaStallWatchdog:
 
         self._last_recovery_utc = now_utc
 
-        print("\n========== WATCHDOG STALL DETECTED ==========")
-        print(f"UTC: {now_utc.isoformat()}")
-        print(f"Last lagoon: {runtime.get('last_lagoon')}")
-        print(f"Last minute rows: {runtime.get('last_minute_rows')}")
-        print(f"Last event count: {runtime.get('last_event_count')}")
-        print(f"DB minute age sec: {snapshot.minute_write_age_sec}")
-        print(f"DB event age sec: {snapshot.event_write_age_sec}")
+        logger.warning(
+            "[WATCHDOG STALL DETECTED] utc=%s lagoon_id=%s last_minute_rows=%s last_event_count=%s db_minute_age_sec=%s db_event_age_sec=%s",
+            now_utc.isoformat(),
+            runtime.get("last_lagoon"),
+            runtime.get("last_minute_rows"),
+            runtime.get("last_event_count"),
+            snapshot.minute_write_age_sec,
+            snapshot.event_write_age_sec,
+        )
 
         # 1) Reset memoria (buffer/last_state)
         reset_ok = await asyncio.to_thread(
@@ -205,18 +210,18 @@ class ScadaStallWatchdog:
         # 3) Dispose pool (fuerza nuevas conexiones)
         await asyncio.to_thread(engine.dispose)
 
-        print(
-            "[WATCHDOG RECOVERY] "
-            f"ingest_reset={reset_ok} "
-            f"killed_idle_tx={killed} "
-            "pool_disposed=True"
+        logger.warning(
+            "[WATCHDOG RECOVERY] ingest_reset=%s killed_idle_tx=%s pool_disposed=%s",
+            reset_ok,
+            killed,
+            True,
         )
 
         if self.hard_restart:
-            print("[WATCHDOG] hard restart triggered")
+            logger.critical("[WATCHDOG] hard restart triggered")
             os._exit(1)
 
-        print("========== WATCHDOG RECOVERY COMPLETE ==========\n")
+        logger.info("[WATCHDOG] recovery_complete")
 
     def _terminate_stuck_transactions(self) -> int:
         db = SessionLocal()

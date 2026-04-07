@@ -2,9 +2,14 @@
 import asyncio
 from typing import Optional
 
+from app.alarms.notifier import dispatch_notifications
+from app.alarms.service import evaluate_alarms
+from app.core.logging import get_logger
 from app.persist.queue import persist_queue
 from app.db.session import SessionLocal
 from app.services.ingest_service import ingest
+
+logger = get_logger("persist.worker")
 
 
 class PersistWorker:
@@ -35,7 +40,24 @@ class PersistWorker:
                     tags=tick.tags,
                     db=db,
                 )
+                _, notification_jobs = evaluate_alarms(
+                    payload={
+                        "lagoon_id": tick.lagoon_id,
+                        "timestamp": tick.timestamp,
+                        "tags": tick.tags,
+                    },
+                    db=db,
+                )
                 db.commit()
+
+                if notification_jobs:
+                    try:
+                        dispatch_notifications(notification_jobs)
+                    except Exception:
+                        logger.exception(
+                            "[PERSIST WORKER ERROR NOTIFICADOR] lagoon_id=%s",
+                            tick.lagoon_id,
+                        )
             except Exception:
                 db.rollback()
             finally:

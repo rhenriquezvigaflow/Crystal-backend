@@ -4,6 +4,10 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
+from app.core.logging import get_logger
+
+logger = get_logger("state.store")
+
 LAYOUT2_VALVE_TAG_SOURCES: Dict[str, tuple[str, ...]] = {
     "ve237": ("VE237_ST",),
     "ve238": ("VE238_ST",),
@@ -107,17 +111,19 @@ class RealtimeStateStore:
                     normalized = None
 
         if normalized is None:
-            print(
-                f"[WS SCADA INVALID VALVE STATE] tag={tag_id} "
-                f"value={value!r} reason=unparseable default=0"
+            logger.warning(
+                "[WS SCADA INVALID VALVE STATE] tag=%s value=%r reason=unparseable default=0",
+                tag_id,
+                value,
             )
             return LAYOUT2_VALVE_DEFAULT_STATE
 
         if normalized not in LAYOUT2_VALVE_VALID_STATES:
-            print(
-                f"[WS SCADA INVALID VALVE STATE] tag={tag_id} "
-                f"value={value!r} normalized={normalized} "
-                f"reason=out_of_range default=0"
+            logger.warning(
+                "[WS SCADA INVALID VALVE STATE] tag=%s value=%r normalized=%s reason=out_of_range default=0",
+                tag_id,
+                value,
+                normalized,
             )
             return LAYOUT2_VALVE_DEFAULT_STATE
 

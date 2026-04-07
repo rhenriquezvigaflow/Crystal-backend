@@ -16,19 +16,26 @@ from app.auth.jwt import decode_access_token, get_current_user, get_token_roles
 from app.auth.services.lagoon_service import (
     PERMISSION_VIEW,
     VALID_PERMISSIONS,
+    get_lagoon_by_id,
+    resolve_permitted_product_types,
     user_has_any_permission,
     user_has_permission,
 )
 from app.db.session import SessionLocal, get_db
+from app.models.role import ProductType
+from app.core.logging import get_logger
+
+logger = get_logger("security.rbac")
 
 ROLE_ADMIN_CRYSTAL = "AdminCrystal"
 ROLE_VISUAL_CRYSTAL = "VisualCrystal"
 ROLE_ADMIN_SMALL = "AdminSmall"
 ROLE_VISUAL_SMALL = "VisualSmall"
+ROLE_SUPERADMIN = "SuperAdmin"
 
-CRYSTAL_READ_ROLES = [ROLE_ADMIN_CRYSTAL, ROLE_VISUAL_CRYSTAL]
+CRYSTAL_READ_ROLES = [ROLE_ADMIN_CRYSTAL, ROLE_VISUAL_CRYSTAL, ROLE_SUPERADMIN]
 CRYSTAL_WRITE_ROLES = [ROLE_ADMIN_CRYSTAL]
-SMALL_READ_ROLES = [ROLE_ADMIN_SMALL, ROLE_VISUAL_SMALL]
+SMALL_READ_ROLES = [ROLE_ADMIN_SMALL, ROLE_VISUAL_SMALL, ROLE_SUPERADMIN]
 SMALL_WRITE_ROLES = [ROLE_ADMIN_SMALL]
 
 ALL_READ_ROLES = [
@@ -36,6 +43,7 @@ ALL_READ_ROLES = [
     ROLE_VISUAL_CRYSTAL,
     ROLE_ADMIN_SMALL,
     ROLE_VISUAL_SMALL,
+    ROLE_SUPERADMIN,
 ]
 
 
@@ -75,6 +83,14 @@ def extract_user_roles(user_payload: dict) -> list[str]:
         return _normalize_roles([legacy])
 
     return []
+
+
+def has_superadmin_role(user_payload: dict) -> bool:
+    user_roles = {
+        role.lower()
+        for role in extract_user_roles(user_payload)
+    }
+    return ROLE_SUPERADMIN.lower() in user_roles
 
 
 def _ensure_allowed_roles(
@@ -216,6 +232,10 @@ def ensure_websocket_permission(
             reason="Invalid token payload",
         )
 
+    user_roles = extract_user_roles(user)
+    permitted_products = sorted(resolve_permitted_product_types(user_roles))
+    email = str(user.get("email", "-"))
+
     db = SessionLocal()
     try:
         allowed = user_has_permission(
@@ -224,13 +244,48 @@ def ensure_websocket_permission(
             lagoon_id=lagoon_id,
             permission=permission,
         )
+        access_mode = "fine_grained" if allowed else "none"
+        lagoon_product = "-"
+
+        if not allowed and permitted_products:
+            lagoon = get_lagoon_by_id(db=db, lagoon_id=lagoon_id)
+            if lagoon is not None:
+                raw_product = lagoon.product_type
+                lagoon_product = (
+                    raw_product.value
+                    if isinstance(raw_product, ProductType)
+                    else str(raw_product)
+                )
+                if lagoon_product in permitted_products:
+                    allowed = True
+                    access_mode = "product_admin"
     finally:
         db.close()
 
     if not allowed:
+        logger.warning(
+            "[RBAC][WS] denied user_id=%s email=%s lagoon_id=%s permission=%s roles=%s permitted_products=%s",
+            user_id,
+            email,
+            lagoon_id,
+            permission,
+            sorted(set(user_roles)),
+            permitted_products,
+        )
         raise WebSocketException(
             code=status.WS_1008_POLICY_VIOLATION,
             reason="Forbidden",
         )
 
+    logger.info(
+        "[RBAC][WS] user_scope_resolved user_id=%s email=%s lagoon_id=%s lagoon_product=%s permission=%s mode=%s roles=%s permitted_products=%s",
+        user_id,
+        email,
+        lagoon_id,
+        lagoon_product,
+        permission,
+        access_mode,
+        sorted(set(user_roles)),
+        permitted_products,
+    )
     return user

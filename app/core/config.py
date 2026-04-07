@@ -45,6 +45,14 @@ class Settings(BaseSettings):
         default=False,
         description="Terminate process on stall after recovery",
     )
+    ALARM_LAGOON_SIGNAL_MONITOR_ENABLED: bool = Field(
+        default=True,
+        description="Enable background monitor for lagoon no-signal alarms",
+    )
+    ALARM_LAGOON_SIGNAL_CHECK_INTERVAL_SEC: float = Field(
+        default=30,
+        description="Background monitor interval in seconds",
+    )
 
     class Config:
         env_file = ".env"

@@ -5,11 +5,15 @@ from pydantic import BaseModel
 from datetime import datetime, timezone
 from typing import Optional
 
+from app.alarms.notifier import dispatch_notifications
+from app.alarms.service import evaluate_alarms
+from app.core.logging import get_logger
 from app.db.session import SessionLocal
 from app.services.ingest_service import ingest
 from app.security.api_key import verify_collector_key
 
 router = APIRouter()
+logger = get_logger("api.ingest")
 INGEST_TIMEOUT_SEC = float(os.getenv("INGEST_TIMEOUT_SEC", "125"))
 
 
@@ -20,6 +24,9 @@ class IngestPayload(BaseModel):
 
 
 def _persist_ingest(lagoon_id: str, ts_dt: datetime, tags: dict):
+    notification_jobs = []
+    transition_count = 0
+
     db = SessionLocal()
     try:
         pump_last_on_updates = ingest(
@@ -28,13 +35,34 @@ def _persist_ingest(lagoon_id: str, ts_dt: datetime, tags: dict):
             tags=tags,
             db=db,
         )
+
+        transitions, notification_jobs = evaluate_alarms(
+            payload={
+                "lagoon_id": lagoon_id,
+                "timestamp": ts_dt,
+                "tags": tags,
+            },
+            db=db,
+        )
+        transition_count = len(transitions)
+
         db.commit()
-        return pump_last_on_updates
     except Exception:
         db.rollback()
         raise
     finally:
         db.close()
+
+    if notification_jobs:
+        try:
+            dispatch_notifications(notification_jobs)
+        except Exception:
+            logger.exception(
+                "[ERROR NOTIFICADOR ALARMAS] lagoon_id=%s",
+                lagoon_id,
+            )
+
+    return pump_last_on_updates, transition_count
 
 
 @router.post("/ingest/scada")
@@ -60,7 +88,7 @@ async def ingest_scada(
     ts_iso = ts_dt.isoformat()
 
     try:
-        pump_last_on_updates = await asyncio.wait_for(
+        pump_last_on_updates, alarm_transition_count = await asyncio.wait_for(
             asyncio.to_thread(
                 _persist_ingest,
                 lagoon_id,
@@ -70,17 +98,28 @@ async def ingest_scada(
             timeout=INGEST_TIMEOUT_SEC,
         )
     except asyncio.TimeoutError:
-        print(
-            f"[INGEST TIMEOUT] lagoon={lagoon_id} "
-            f"timeout={INGEST_TIMEOUT_SEC}s"
+        logger.warning(
+            "[INGEST TIMEOUT] lagoon_id=%s timeout_sec=%s",
+            lagoon_id,
+            INGEST_TIMEOUT_SEC,
         )
         raise HTTPException(
             status_code=504,
             detail="Ingest timeout",
         )
-    except Exception as e:
-        print("[INGEST DB ERROR]", e)
+    except Exception:
+        logger.exception(
+            "[INGEST DB ERROR] lagoon_id=%s",
+            lagoon_id,
+        )
         raise
+
+    if alarm_transition_count:
+        logger.info(
+            "[INGEST ALARMAS] lagoon_id=%s transiciones=%s",
+            lagoon_id,
+            alarm_transition_count,
+        )
 
     # ===== REALTIME =====
     await state.update(

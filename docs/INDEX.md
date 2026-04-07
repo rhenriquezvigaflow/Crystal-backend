@@ -1,7 +1,7 @@
 # Documentacion Crystal Lagoons Backend
 
-**Version de documentacion:** `1.2`
-**Ultima actualizacion:** `2026-03-13`
+**Version de documentacion:** `1.3.3`
+**Ultima actualizacion:** `2026-04-07`
 
 ---
 
@@ -13,20 +13,25 @@
 4. [GUIA_TECNICA_DESARROLLO.md](./GUIA_TECNICA_DESARROLLO.md) - Setup local, ejemplos y troubleshooting.
 5. [DIAGRAMAS_FLUJOS.md](./DIAGRAMAS_FLUJOS.md) - Diagramas ASCII simplificados.
 6. [ONBOARDING.md](./ONBOARDING.md) - Ruta de onboarding tecnico.
+7. [README_ALARM_THRESHOLDS_API.md](./README_ALARM_THRESHOLDS_API.md) - Contrato vigente de umbrales PT/FIT (`GET /view` + `PUT`).
+8. [ALARMAS_ACTUALES_Y_LOGICA.md](./ALARMAS_ACTUALES_Y_LOGICA.md) - Estado real del motor de alarmas y reglas operativas.
+9. [PROMPT_FRONT_ALARMAS_PT_FIT.md](./PROMPT_FRONT_ALARMAS_PT_FIT.md) - Prompt frontend actualizado al contrato actual.
 
 ---
 
-## Cambios v1.2 (2026-03-13)
+## Cambios v1.3.3 (2026-04-07)
 
 Actualizado en documentacion:
 
-- Seguridad de ingest por `x-api-key`.
-- Flujo de login por `POST /auth/login` y uso de JWT bearer.
-- RBAC por roles y permisos por laguna (`can_view`, `can_edit`, `can_control`).
-- Endpoints producto-especificos (`/api/crystal/*`, `/api/small/*`).
-- WebSockets autenticados con token y control por laguna.
-- Setup de BD con tablas RBAC (`create_rbac_tables.sql`) y seed de roles.
-- Correccion de codificacion de documentos.
+- Contrato PT/FIT consolidado:
+  - `GET /alarms/{lagoon_id}/thresholds/pt-fit/view`
+  - `PUT /alarms/{lagoon_id}/thresholds/pt-fit`
+- Contrato simplificado de umbrales:
+  - `severity` unico por tag.
+  - `deadband` fuera del contrato API (interno fijo en `0.0`).
+  - `source` en vista: `configured|candidate`.
+- Prompt frontend de alarmas alineado a implementacion actual.
+- Registro de ajuste de migracion SQL para recreacion de vista sin error `42P16`.
 
 Detalle completo:
 - [CHANGELOG.md](./CHANGELOG.md)
@@ -95,4 +100,5 @@ WebSocket:
 - [x] RBAC de permisos por laguna documentado.
 - [x] APIs Crystal y Small incluidas.
 - [x] WebSockets con seguridad documentados.
-- [x] Version documental incrementada a `1.2`.
+- [x] Contrato PT/FIT vigente (`GET /view` + `PUT`) documentado.
+- [x] Version documental incrementada a `1.3.3`.
