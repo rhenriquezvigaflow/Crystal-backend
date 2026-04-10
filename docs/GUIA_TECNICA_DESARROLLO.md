@@ -1,19 +1,7 @@
-# Guia Tecnica de Desarrollo - Crystal Lagoons Backend
+ï»¿# Guia Tecnica de Desarrollo - Crystal Lagoons Backend
 
-**Ultima actualizacion:** 2026-03-13
+**Ultima actualizacion:** 2026-04-09
 **Publico:** Desarrolladores Python/FastAPI
-
----
-
-## Tabla de contenidos
-
-1. Setup rapido
-2. Variables de entorno
-3. Ejecutar aplicacion
-4. Flujos de prueba con cURL
-5. Estructura de codigo
-6. Testing
-7. Troubleshooting
 
 ---
 
@@ -29,12 +17,12 @@ Instalacion:
 
 ```bash
 cd crystal-backend
-python -m venv venv
-venv\Scripts\activate
+python -m venv .venv
+.venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-Crear `.env` (ejemplo minimo):
+`.env` minimo:
 
 ```env
 DATABASE_URL=postgresql://postgres:postgres@localhost:5432/crystal
@@ -44,43 +32,17 @@ JWT_ALGORITHM=HS256
 JWT_ACCESS_TOKEN_EXPIRE_MINUTES=60
 ```
 
-Preparar RBAC base:
+Variables utiles:
 
-```bash
-psql "$DATABASE_URL" -f scripts/sql/create_rbac_tables.sql
-python scripts/seed_roles.py
-```
-
-Opcional (historial con vistas continuas):
-
-```bash
-psql "$DATABASE_URL" -f scripts/sql/create_scada_continuous_aggregates.sql
+```env
+INGEST_TIMEOUT_SEC=125
+SCADA_LAYOUT_CACHE_TTL_SEC=300
+LAYOUT_CONFIG_CACHE_TTL_SEC=300
 ```
 
 ---
 
-## 2) Variables de entorno
-
-Requeridas:
-
-- `DATABASE_URL`
-- `COLLECTOR_API_KEY`
-- `JWT_SECRET_KEY`
-
-Importantes:
-
-- `JWT_ALGORITHM` (default `HS256`)
-- `JWT_ACCESS_TOKEN_EXPIRE_MINUTES` (default `60`)
-- `INGEST_TIMEOUT_SEC` (default `125`)
-- `SCADA_WATCHDOG_ENABLED` y familia `SCADA_WATCHDOG_*`
-
-Nota:
-
-- `app/core/config.py` usa `extra="forbid"`; variables no declaradas pueden romper carga de settings.
-
----
-
-## 3) Ejecutar aplicacion
+## 2) Ejecutar aplicacion
 
 ```bash
 python -m uvicorn app.main:app --reload
@@ -95,185 +57,160 @@ curl http://localhost:8000/health
 Respuesta esperada:
 
 ```json
-{"status": "ok"}
+{"status":"ok"}
 ```
 
 ---
 
-## 4) Flujos de prueba con cURL
-
-### 4.1 Login
-
-```bash
-curl -X POST http://localhost:8000/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"email":"admin@example.com","password":"Secret123!"}'
-```
-
-Guardar token:
-
-```bash
-TOKEN="<access_token>"
-```
-
-### 4.2 Ingest protegido por API key
-
-```bash
-curl -X POST http://localhost:8000/ingest/scada \
-  -H "Content-Type: application/json" \
-  -H "x-api-key: $COLLECTOR_API_KEY" \
-  -d '{
-    "lagoon_id":"laguna_1",
-    "timestamp":"2026-03-13T14:30:45Z",
-    "tags":{"bomba_1":1,"temperatura":28.5}
-  }'
-```
-
-### 4.3 Lecturas SCADA (bearer)
-
-```bash
-curl "http://localhost:8000/scada/laguna_1/current" \
-  -H "Authorization: Bearer $TOKEN"
-
-curl "http://localhost:8000/scada/laguna_1/last-minute" \
-  -H "Authorization: Bearer $TOKEN"
-
-curl "http://localhost:8000/scada/laguna_1/pump-events/last-3" \
-  -H "Authorization: Bearer $TOKEN"
-
-curl "http://localhost:8000/scada/history/hourly?lagoon_id=laguna_1&start_date=2026-03-01T00:00:00Z&end_date=2026-03-13T23:59:59Z" \
-  -H "Authorization: Bearer $TOKEN"
-```
-
-### 4.4 RBAC por permisos de laguna
-
-```bash
-curl "http://localhost:8000/lagoons" \
-  -H "Authorization: Bearer $TOKEN"
-
-curl -X PUT "http://localhost:8000/lagoons/laguna_1" \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"values":{"timezone":"America/Santiago"}}'
-
-curl -X POST "http://localhost:8000/control/pump" \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"lagoon_id":"laguna_1","action":"start","payload":{}}'
-```
-
-### 4.5 API Crystal y Small
-
-```bash
-curl "http://localhost:8000/api/crystal/lagoons" \
-  -H "Authorization: Bearer $TOKEN"
-
-curl "http://localhost:8000/api/small/lagoons" \
-  -H "Authorization: Bearer $TOKEN"
-```
-
-### 4.6 WebSocket
-
-Ejemplo con query token:
-
-```text
-ws://localhost:8000/ws/scada?lagoon_id=laguna_1&token=<jwt>
-```
-
-Al conectar debe llegar `snapshot`; luego `tick` en cada ingest.
-
----
-
-## 5) Estructura de codigo
+## 3) Estructura de codigo
 
 ```text
 app/
-  main.py                        # bootstrap + routers + CORS
-  core/config.py                 # settings
-  db/session.py                  # SessionLocal + get_db
-  auth/
-    auth.py                      # POST /auth/login
-    jwt.py                       # create/decode token
-    services/
-      auth_service.py            # authenticate_user + login response
-      lagoon_service.py          # permisos por laguna
-    routers/
-      lagoons_router.py          # /lagoons, /control/pump
-  security/
-    rbac.py                      # require_roles / require_permission / ws permission
-    api_key.py                   # verify_collector_key
+  main.py                         # bootstrap, routers, lifespan
   routers/
-    ingest.py                    # POST /ingest/scada
-    scada_read.py                # /scada/{lagoon}/current,last-minute
-    scada_event.py               # /scada/{lagoon}/pump-events/last-3
-    crystal/*                    # API producto crystal
-    small/*                      # API producto small
-  scada/history/
-    repo.py                      # resolución + view/fallback
-    router.py                    # GET /scada/history/{resolution}
-  state/store.py                 # estado realtime + payload
-  ws/routes.py                   # websocket endpoints
+    ingest.py                     # POST /ingest/scada
+    scada_layouts.py              # /layouts + /lagoons/{id}/mapping
+    crystal/lagoons.py            # endpoints producto Crystal
+    small/lagoons.py              # endpoints producto Small
+  layout_config/
+    repository.py                 # DB layouts/mapping/collector_tags
+    schemas.py                    # Pydantic contracts
+    service.py                    # cache, validacion, update
+  models/
+    layout.py                     # tabla layouts
+    lagoon_layout_mapping.py      # tabla lagoon_layout_mapping
+    lagoon.py                     # tabla lagoons
+  scada/
+    layout_resolver.py            # normalizacion layout_id
+    history/repo.py               # historico view/fallback
+  services/
+    ingest_service.py             # persistencia SCADA
+  state/store.py                  # realtime state
+  ws/routes.py                    # websocket
+  alarms/                         # motor alarmas
+```
+
+---
+
+## 4) Probar layout SCADA
+
+Obtener layout:
+
+```bash
+curl "http://localhost:8000/layouts/layout1" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Obtener mapping de laguna:
+
+```bash
+curl "http://localhost:8000/lagoons/costa_del_lago/mapping" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Obtener configuracion producto:
+
+```bash
+curl "http://localhost:8000/api/crystal/lagoons/costa_del_lago/layout-config" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Actualizar mapping:
+
+```bash
+curl -X PUT "http://localhost:8000/api/crystal/lagoons/costa_del_lago/layout-config" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "layout_id": "layout1",
+    "mapping_json": {
+      "pressure_1": { "tag": "PT117_R_SCADA", "label": "PT_117" }
+    }
+  }'
+```
+
+Notas:
+
+- El `PUT` requiere permiso de edicion para la laguna.
+- Si una clave de `mapping_json` no existe en `layout.elements[].id`, devuelve `422`.
+- El servicio actualiza `lagoons.scada_layout` con el `layout_id` enviado.
+
+---
+
+## 5) Historico
+
+```bash
+curl "http://localhost:8000/api/crystal/history?lagoon_id=costa_del_lago&start_date=2026-04-09T00:00:00Z&end_date=2026-04-09T23:59:59Z&resolution=hourly" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Respuesta esperada:
+
+```json
+{
+  "lagoon_id": "costa_del_lago",
+  "resolution": "hourly",
+  "source": "table",
+  "series": [
+    {
+      "tag": "PT117_R_SCADA",
+      "points": [
+        { "timestamp": "2026-04-09T12:00:00Z", "value": 2.34 }
+      ]
+    }
+  ]
+}
 ```
 
 ---
 
 ## 6) Testing
 
-Ejecutar todo:
+Ejecutar suite completa:
 
 ```bash
-pytest tests/ -v
+python -m pytest -q
 ```
 
-Suites relevantes:
+Tests relevantes para layouts:
 
-- `tests/test_auth_core.py`
-- `tests/test_rbac.py`
-- `tests/test_rbac_permissions.py`
+- `tests/test_scada_layouts.py`
 
-Smoke recomendado despues de cambios en auth/RBAC:
+Smoke recomendado:
 
-1. login exitoso y login invalido.
-2. endpoint protegido con y sin bearer.
-3. websocket con token valido e invalido.
-4. ingest con y sin `x-api-key`.
-
----
-
-## 7) Troubleshooting
-
-### Error: Missing bearer token / Invalid or expired token
-
-- Verifica `Authorization: Bearer <token>`.
-- Verifica `JWT_SECRET_KEY` y expiracion.
-
-### Error: Invalid collector key
-
-- Verifica `x-api-key` contra `COLLECTOR_API_KEY`.
-
-### Error 403 en endpoints con token valido
-
-- Revisar roles en JWT (`roles`).
-- Revisar permisos por laguna en `vw_user_lagoons`.
-
-### Error en historial por columnas/vistas
-
-- Verifica que exista `scada_minute` con columna `bucket`.
-- Si usas vistas continuas, aplicar script `create_scada_continuous_aggregates.sql`.
-
-### WebSocket cierra con codigo 1008
-
-- Token faltante o invalido.
-- Usuario sin `can_view` para esa laguna.
-
-### Fallas de arranque por settings
-
-- Revisar `.env` y claves requeridas en `app/core/config.py`.
+1. `GET /health`.
+2. login valido.
+3. `GET /layouts/layout1`.
+4. `GET /lagoons/{id}/mapping`.
+5. `GET /api/{product}/lagoons/{id}/layout-config`.
+6. `GET /api/{product}/history`.
+7. WebSocket `/ws/scada/{id}`.
 
 ---
 
-Documentos complementarios:
+## 7) Troubleshooting rapido
 
-- [INDEX.md](./INDEX.md)
-- [ARQUITECTURA_Y_FLUJO.md](./ARQUITECTURA_Y_FLUJO.md)
-- [FLUJO_INSERCION.md](./FLUJO_INSERCION.md)
+### Backend no arranca por `Lagoon is not defined`
+
+- Revisar import `from app.models.lagoon import Lagoon` en `app/main.py`.
+
+### Mapping no muestra tarjetas
+
+- Revisar `collector_tag_registry` para la laguna.
+- Si el tag no esta habilitado por collector, el frontend lo oculta.
+- Para elementos que siempre deben verse, usar `always_visible=true` en el layout.
+
+### `PUT layout-config` devuelve 422
+
+- Alguna clave del mapping no existe en `layout.json_definition.elements[].id`.
+
+### Historico muestra series vacias
+
+- Revisar rango de fechas.
+- Revisar si hay datos en `scada_minute`.
+- Recordar que frontend filtra tags de estado, WM y RETRO para graficos.
+
+### Valores realtime `--`
+
+- Puede no haber WebSocket o tag no presente en `tags`.
+- El mapa se muestra igualmente despues de 7 segundos para lagunas desconectadas.

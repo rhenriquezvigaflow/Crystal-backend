@@ -1,5 +1,31 @@
 # Changelog de Documentacion
 
+## v1.4.0 - 2026-04-09
+
+Cambios documentados en esta version:
+
+- Sistema SCADA layout dinamico:
+  - tabla `layouts` para definicion visual reutilizable.
+  - tabla `lagoon_layout_mapping` para tags, labels y overrides por laguna.
+  - endpoints `GET /layouts/{layout_id}` y `GET|PUT /lagoons/{lagoon_id}/mapping`.
+  - endpoints producto `GET|PUT /api/{product}/lagoons/{lagoon_id}/layout-config`.
+- Filtro por tags habilitados en collector:
+  - `collector_tags` via `collector_tag_registry`.
+  - frontend oculta tarjetas no habilitadas, salvo elementos `always_visible=true`.
+- Estado UI SCADA:
+  - labels de equipos por JSON base/override en frontend.
+  - estados SVG de bombas y valvulas con colores `0=rojo`, `1=verde`, `2=azul`, `3=amarillo`.
+  - `RETRO_SCADA` documentado como elemento siempre visible.
+  - modo offline muestra plano y tarjetas con `--` despues de 7 segundos.
+- Historico:
+  - documentada compatibilidad frontend con `tag`, `tag_key` o `name`.
+- Documentos restaurados y actualizados:
+  - `ONE_PAGE_SUMMARY.md`
+  - `ARQUITECTURA_Y_FLUJO.md`
+  - `GUIA_TECNICA_DESARROLLO.md`
+  - `ONBOARDING.md`
+  - `README_ALARM_THRESHOLDS_API.md`
+
 ## v1.3.4 - 2026-04-07
 
 Cambios documentados en esta version:

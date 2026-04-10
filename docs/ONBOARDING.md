@@ -1,6 +1,6 @@
-# Guia de Onboarding - Crystal Lagoons Backend
+﻿# Guia de Onboarding - Crystal Lagoons Backend
 
-**Ultima actualizacion:** 2026-03-13
+**Ultima actualizacion:** 2026-04-09
 **Tiempo estimado:** 3-5 horas
 
 ---
@@ -12,14 +12,15 @@ Al finalizar deberias poder:
 - levantar el backend local,
 - autenticarte y consumir endpoints protegidos,
 - enviar ingest con API key,
-- leer datos SCADA y websocket,
-- entender donde hacer cambios.
+- leer historico y realtime,
+- entender el sistema de layouts SCADA reutilizables,
+- ubicar donde hacer cambios de alarmas, mappings y estados SCADA.
 
 ---
 
 ## Ruta sugerida
 
-### Bloque 1 (45 min) - Entender el sistema
+### Bloque 1 - Entender el sistema
 
 Lee en este orden:
 
@@ -30,45 +31,28 @@ Lee en este orden:
 Checklist:
 
 - sabes para que sirve `POST /ingest/scada`.
-- entiendes diferencia entre `current`, `last-minute` e `history`.
-- entiendes que WS requiere token + permiso por laguna.
+- entiendes diferencia entre realtime WS e historico REST.
+- entiendes que `layouts` define estructura y `lagoon_layout_mapping` define tags/labels por laguna.
+- sabes que `collector_tags` decide que tarjetas se muestran.
 
 ---
 
-### Bloque 2 (60 min) - Setup local
+### Bloque 2 - Setup local
 
 ```bash
 cd crystal-backend
-python -m venv venv
-venv\Scripts\activate
+python -m venv .venv
+.venv\Scripts\activate
 pip install -r requirements.txt
+python -m uvicorn app.main:app --reload
 ```
 
-Crear `.env` minimo:
+`.env` minimo:
 
 ```env
 DATABASE_URL=postgresql://postgres:postgres@localhost:5432/crystal
 COLLECTOR_API_KEY=replace-me
 JWT_SECRET_KEY=replace-me
-```
-
-Inicializar RBAC:
-
-```bash
-psql "$DATABASE_URL" -f scripts/sql/create_rbac_tables.sql
-python scripts/seed_roles.py
-```
-
-Opcional (vistas historicas):
-
-```bash
-psql "$DATABASE_URL" -f scripts/sql/create_scada_continuous_aggregates.sql
-```
-
-Levantar API:
-
-```bash
-python -m uvicorn app.main:app --reload
 ```
 
 Verificacion:
@@ -79,94 +63,70 @@ curl http://localhost:8000/health
 
 ---
 
-### Bloque 3 (45 min) - Probar flujo extremo a extremo
+### Bloque 3 - Probar flujo extremo a extremo
 
-1) Login:
-
-```bash
-curl -X POST http://localhost:8000/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"email":"admin@example.com","password":"Secret123!"}'
-```
-
-2) Ingest:
+1. Login y guardar token.
+2. Consultar lagunas:
 
 ```bash
-curl -X POST http://localhost:8000/ingest/scada \
-  -H "Content-Type: application/json" \
-  -H "x-api-key: $COLLECTOR_API_KEY" \
-  -d '{"lagoon_id":"laguna_1","tags":{"bomba_1":1,"temperatura":28.5}}'
-```
-
-3) Lectura protegida:
-
-```bash
-curl "http://localhost:8000/scada/laguna_1/current" \
+curl "http://localhost:8000/api/crystal/lagoons" \
   -H "Authorization: Bearer $TOKEN"
 ```
 
-4) WebSocket:
-
-- conectar a `ws://localhost:8000/ws/scada?lagoon_id=laguna_1&token=<jwt>`
-- confirmar recepcion de `snapshot` y luego `tick`.
-
----
-
-### Bloque 4 (45 min) - Primer cambio sugerido
-
-Cambio pequeno recomendado:
-
-- agregar test para endpoint protegido o para permiso RBAC.
-
-Flujo:
+3. Consultar layout/mapping:
 
 ```bash
-git checkout -b feature/onboarding-primer-cambio
-pytest tests/test_rbac_permissions.py -v
-# editar
-pytest tests/ -v
-git add .
-git commit -m "test: cubrir caso de permiso faltante"
-git push origin feature/onboarding-primer-cambio
+curl "http://localhost:8000/lagoons/costa_del_lago/mapping" \
+  -H "Authorization: Bearer $TOKEN"
+
+curl "http://localhost:8000/layouts/layout1" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+4. Probar historico:
+
+```bash
+curl "http://localhost:8000/api/crystal/history?lagoon_id=costa_del_lago&start_date=2026-04-09T00:00:00Z&end_date=2026-04-09T23:59:59Z&resolution=hourly" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+5. Conectar WebSocket:
+
+```text
+ws://localhost:8000/ws/scada/costa_del_lago?token=<jwt>
 ```
 
 ---
 
 ## Mapa rapido de archivos
 
-- `app/main.py`: bootstrap, routers, CORS.
-- `app/routers/ingest.py`: endpoint ingest + API key.
-- `app/security/rbac.py`: roles, permisos y WS auth.
-- `app/auth/auth.py`: login.
-- `app/state/store.py`: payload realtime.
-- `app/scada/history/repo.py`: resolucion y fallback historico.
+Backend:
 
----
+- `app/main.py`: bootstrap.
+- `app/routers/ingest.py`: ingest.
+- `app/layout_config/service.py`: cache y validacion layout/mapping.
+- `app/routers/scada_layouts.py`: endpoints generales de layout.
+- `app/routers/crystal/lagoons.py`: layout-config Crystal.
+- `app/routers/small/lagoons.py`: layout-config Small.
+- `app/scada/history/repo.py`: historico.
+- `app/alarms/thresholds/service.py`: umbrales PT/FIT.
 
-## Preguntas frecuentes
+Frontend relacionado:
 
-### Que credenciales uso para login?
-
-Depende de los usuarios existentes en tu BD (`users`).
-
-### Por que recibo 403 con token valido?
-
-Token valido no implica permiso por laguna; revisar `vw_user_lagoons`.
-
-### Por que ingest devuelve 401?
-
-Falta o no coincide `x-api-key`.
-
-### Por que websocket cierra con 1008?
-
-Token invalido/faltante o usuario sin `can_view` para la laguna.
+- `src/hooks/useScadaLayoutScene.ts`.
+- `src/scada/layoutSceneResolver.ts`.
+- `src/containers/ScadaOverlay.tsx`.
+- `src/containers/ScadaEquipmentStateOverlay.tsx`.
+- `src/scada/equipment-state/layouts/*.equipment.json`.
+- `src/scada/labels/layouts/*.base.json`.
 
 ---
 
 ## Siguiente paso recomendado
 
-Despues de onboarding:
+Para un primer cambio seguro:
 
-1. tomar un bug pequeno en auth o scada read,
-2. agregar test de regresion,
-3. actualizar `docs/CHANGELOG.md` si cambias contrato.
+1. agrega o ajusta un elemento en `layouts.json_definition` en BD,
+2. valida que existe en `mapping_json`,
+3. corre `python -m pytest -q`,
+4. valida frontend con `npm run build`.

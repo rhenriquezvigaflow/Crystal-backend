@@ -9,8 +9,10 @@ from sqlalchemy.orm import Session
 from app.core.logging import get_logger
 from app.models.lagoon import Lagoon
 from app.models.role import ProductType
+from app.scada.layout_resolver import normalize_scada_layout
 
 ROLE_ADMIN_CRYSTAL = "AdminCrystal"
+ROLE_VISUAL_CRYSTAL = "VisualCrystal"
 ROLE_ADMIN_SMALL = "AdminSmall"
 ROLE_SUPERADMIN = "SuperAdmin"
 logger = get_logger("auth.lagoon_scope")
@@ -56,7 +58,7 @@ def resolve_permitted_product_types(
         return {ProductType.CRYSTAL.value, ProductType.SMALL.value}
 
     permitted: set[str] = set()
-    if ROLE_ADMIN_CRYSTAL.lower() in roles:
+    if ROLE_ADMIN_CRYSTAL.lower() in roles or ROLE_VISUAL_CRYSTAL.lower() in roles:
         permitted.add(ProductType.CRYSTAL.value)
     if ROLE_ADMIN_SMALL.lower() in roles:
         permitted.add(ProductType.SMALL.value)
@@ -89,9 +91,10 @@ def _map_lagoon(lagoon: Lagoon) -> dict:
     return {
         "lagoon_id": lagoon.id,
         "lagoon_name": lagoon.name,
-        "scada_layout": lagoon.scada_layout,
+        "scada_layout": normalize_scada_layout(lagoon.scada_layout),
         "timezone": lagoon.timezone,
         "ip": lagoon.ip,
+        "enable": bool(lagoon.enable),
         "product_type": (
             lagoon.product_type.value
             if isinstance(lagoon.product_type, ProductType)
@@ -109,7 +112,10 @@ def _lagoon_product_value(lagoon: Lagoon) -> str:
 def get_lagoon_by_id(db: Session, lagoon_id: str) -> Lagoon | None:
     return (
         db.query(Lagoon)
-        .filter(Lagoon.id == lagoon_id)
+        .filter(
+            Lagoon.id == lagoon_id,
+            Lagoon.enable.is_(True),
+        )
         .first()
     )
 
@@ -207,7 +213,10 @@ def get_product_lagoons_for_user(
 ) -> list[Lagoon]:
     query = (
         db.query(Lagoon)
-        .filter(Lagoon.product_type == product_type)
+        .filter(
+            Lagoon.product_type == product_type,
+            Lagoon.enable.is_(True),
+        )
         .order_by(Lagoon.name.asc())
     )
 
@@ -244,7 +253,7 @@ def get_accessible_lagoons(
     if product_enums:
         filters.append(Lagoon.product_type.in_(product_enums))
 
-    query = db.query(Lagoon).order_by(Lagoon.name.asc())
+    query = db.query(Lagoon).filter(Lagoon.enable.is_(True)).order_by(Lagoon.name.asc())
     if len(filters) == 1:
         lagoons = query.filter(filters[0]).all()
     else:
@@ -265,10 +274,13 @@ def user_has_permission(
             f"""
             SELECT EXISTS (
                 SELECT 1
-                FROM vw_user_lagoons
-                WHERE user_id::text = :user_id
-                  AND lagoon_id::text = :lagoon_id
-                  AND {permission_column} = TRUE
+                FROM vw_user_lagoons vul
+                JOIN lagoons l
+                  ON l.id::text = vul.lagoon_id::text
+                WHERE vul.user_id::text = :user_id
+                  AND vul.lagoon_id::text = :lagoon_id
+                  AND vul.{permission_column} = TRUE
+                  AND l.enable = TRUE
             )
             """
         ),
@@ -292,9 +304,12 @@ def user_has_any_permission(
             f"""
             SELECT EXISTS (
                 SELECT 1
-                FROM vw_user_lagoons
-                WHERE user_id::text = :user_id
-                  AND {permission_column} = TRUE
+                FROM vw_user_lagoons vul
+                JOIN lagoons l
+                  ON l.id::text = vul.lagoon_id::text
+                WHERE vul.user_id::text = :user_id
+                  AND vul.{permission_column} = TRUE
+                  AND l.enable = TRUE
             )
             """
         ),

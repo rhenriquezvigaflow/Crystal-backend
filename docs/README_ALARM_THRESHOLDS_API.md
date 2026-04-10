@@ -1,6 +1,10 @@
-# API Alarmas de Umbral PT/FIT
+﻿# API Alarmas de Umbral PT/FIT
 
-## Rutas finales disponibles
+**Actualizado:** 2026-04-09
+
+---
+
+## Rutas disponibles
 
 Rutas base:
 
@@ -9,41 +13,27 @@ Rutas base:
 
 Aliases de compatibilidad:
 
-- `GET /crystal/alarms/{lagoon_id}/thresholds/pt-fit/view`
-- `PUT /crystal/alarms/{lagoon_id}/thresholds/pt-fit`
-- `GET /small/alarms/{lagoon_id}/thresholds/pt-fit/view`
-- `PUT /small/alarms/{lagoon_id}/thresholds/pt-fit`
-- `GET /api/alarms/{lagoon_id}/thresholds/pt-fit/view`
-- `PUT /api/alarms/{lagoon_id}/thresholds/pt-fit`
-- `GET /api/crystal/alarms/{lagoon_id}/thresholds/pt-fit/view`
-- `PUT /api/crystal/alarms/{lagoon_id}/thresholds/pt-fit`
-- `GET /api/small/alarms/{lagoon_id}/thresholds/pt-fit/view`
-- `PUT /api/small/alarms/{lagoon_id}/thresholds/pt-fit`
+- `GET|PUT /crystal/alarms/{lagoon_id}/thresholds/pt-fit[/view]`
+- `GET|PUT /small/alarms/{lagoon_id}/thresholds/pt-fit[/view]`
+- `GET|PUT /api/alarms/{lagoon_id}/thresholds/pt-fit[/view]`
+- `GET|PUT /api/crystal/alarms/{lagoon_id}/thresholds/pt-fit[/view]`
+- `GET|PUT /api/small/alarms/{lagoon_id}/thresholds/pt-fit[/view]`
 
 Nota:
 
-- El backend soporta rutas con y sin prefijo `/api`.
-- Si el proxy reescribe `/api`, igual funciona.
-- Si no reescribe `/api`, tambien funciona por alias nativo.
+- El frontend usa prefijo cacheado por laguna y fallback entre rutas.
+- La vista `/view` es el contrato recomendado para lectura.
 
-## Ejemplos curl
+---
 
-Definir:
-
-```bash
-BASE_URL="https://localhost"
-TOKEN="<JWT_BEARER_TOKEN>"
-LAGOON_ID="costa_del_lago"
-```
-
-### 1) View (consolidada, recomendada para frontend)
+## Obtener vista consolidada
 
 ```bash
 curl -k -X GET "$BASE_URL/alarms/$LAGOON_ID/thresholds/pt-fit/view" \
   -H "Authorization: Bearer $TOKEN"
 ```
 
-Respuesta esperada (resumen):
+Respuesta:
 
 ```json
 {
@@ -62,7 +52,9 @@ Respuesta esperada (resumen):
 }
 ```
 
-### 2) Upsert
+---
+
+## Guardar umbrales
 
 ```bash
 curl -k -X PUT "$BASE_URL/alarms/$LAGOON_ID/thresholds/pt-fit" \
@@ -81,20 +73,29 @@ curl -k -X PUT "$BASE_URL/alarms/$LAGOON_ID/thresholds/pt-fit" \
   }'
 ```
 
+---
+
 ## Validaciones funcionales
 
 - `tag_id` debe iniciar con `PT` o `FIT`.
 - Debe venir `min_value` o `max_value`.
-- Si vienen ambos: `min_value < max_value`.
+- Si vienen ambos, `min_value < max_value`.
 - `severity` en `info|warning|critical`.
 - `items` no puede estar vacio.
 
-## Rendimiento (benchmark simple)
+---
 
-Medir latencia de lectura del endpoint consolidado (`/view`).
+## Integracion frontend
 
-Script sugerido:
+Archivos:
 
-```bash
-python scripts/bench_alarm_thresholds_view.py
-```
+- `src/components/AlarmManagerModal.tsx`
+- `src/hooks/useAlarmThresholds.ts`
+- `src/services/alarm-thresholds.api.ts`
+- `src/types/alarm-thresholds.ts`
+
+La UI mezcla:
+
+- filas `configured` desde backend,
+- candidatos PT/FIT detectados por realtime,
+- permisos `can_edit` para habilitar guardado.

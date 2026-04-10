@@ -1,345 +1,297 @@
-# Arquitectura y Flujo - Crystal Lagoons Backend
+﻿# Arquitectura y Flujo - Crystal Lagoons Backend
 
-**Ultima actualizacion:** 2026-03-13
-**Version:** 1.2
-
----
-
-## Tabla de contenidos
-
-1. Vision general
-2. Startup y ciclo de vida
-3. Seguridad
-4. Componentes principales
-5. Endpoints activos
-6. Flujos funcionales
-7. Modelos y vistas de datos
-8. Configuracion operativa
+**Ultima actualizacion:** 2026-04-09
+**Version:** 1.4.0
 
 ---
 
 ## Vision general
 
-El backend es una API FastAPI que:
-
-- ingiere datos SCADA en tiempo real,
-- persiste historico y eventos de estado,
-- mantiene estado en memoria por laguna,
-- publica snapshot/tick por websocket,
-- aplica control de acceso por JWT + RBAC.
-
-Arquitectura logica:
+El backend es una API FastAPI para telemetria SCADA, alarmas, historico, layouts dinamicos y acceso por RBAC.
 
 ```text
 Collector -> /ingest/scada -> IngestService -> PostgreSQL
                                 |
+                                +-> Alarm engine
                                 +-> RealtimeStateStore -> WebSocketManager
 
-User UI -> /auth/login -> JWT
-User UI -> /scada/*, /api/* (bearer token)
-User UI -> /ws/* (token + permiso por laguna)
+Frontend -> REST /api/* + /layouts/* + /lagoons/*/mapping
+Frontend -> WS /ws/scada/{lagoon_id}
 ```
 
 ---
 
 ## Startup y ciclo de vida
 
-`app/main.py` define `lifespan` y durante startup ejecuta:
+`app/main.py` registra routers e inicializa durante `lifespan`:
 
-1. Crea singletons:
-   - `app.state.state_store` (`RealtimeStateStore`)
-   - `app.state.ws_manager` (`WebSocketManager`)
-2. Carga `timezone` por laguna desde tabla `lagoons`.
-3. Detecta lagunas con eventos y precarga `pump_last_on` desde `vw_scada_last_3_pump_actions`.
-4. Inicia `ScadaStallWatchdog`.
+1. `RealtimeStateStore`.
+2. `WebSocketManager`.
+3. Timezones y `scada_layout` desde `lagoons`.
+4. Precarga de `pump_last_on` desde `vw_scada_last_3_pump_actions`.
+5. `ScadaStallWatchdog`.
+6. `AlarmLagoonSignalMonitor`.
 
-En shutdown detiene watchdog.
+En shutdown detiene monitores.
 
 ---
 
 ## Seguridad
 
-### 1) Ingest por API key
+### Ingest
 
-`POST /ingest/scada` exige header:
+`POST /ingest/scada` exige:
 
 - `x-api-key: <COLLECTOR_API_KEY>`
 
-Validado por `app/security/api_key.py`.
+### JWT y RBAC
 
-### 2) Login y JWT
+`POST /auth/login` entrega JWT. Claims esperadas:
 
-`POST /auth/login` retorna:
-
-- `access_token`
-- `token_type` (`bearer`)
-- `expires_in`
-- `user` con `roles` y `role` (compatibilidad legacy)
-
-Claims esperadas en token:
-
-- `sub` (user_id)
+- `sub`
 - `email`
-- `roles` (lista)
-- `role` (string legacy)
+- `roles`
+- `role` legacy
 
-### 3) Roles
-
-Roles vigentes:
+Roles:
 
 - `AdminCrystal`
 - `VisualCrystal`
 - `AdminSmall`
 - `VisualSmall`
+- `SuperAdmin`
 
-Grupos usados por dependencias RBAC:
-
-- Crystal read: `AdminCrystal`, `VisualCrystal`
-- Crystal write: `AdminCrystal`
-- Small read: `AdminSmall`, `VisualSmall`
-- Small write: `AdminSmall`
-- Read general SCADA: union de todos los de lectura
-
-### 4) Permisos por laguna
-
-Permisos evaluados sobre `vw_user_lagoons`:
+Permisos por laguna:
 
 - `can_view`
 - `can_edit`
 - `can_control`
 
-Dependencias:
-
-- `require_permission(...)` para HTTP
-- `ensure_websocket_permission(...)` para WebSocket
-
-### 5) WebSocket auth
-
-Soporta token por:
-
-- query `token=<jwt>`
-- header `Authorization: Bearer <jwt>`
-
-Si no hay token, token invalido o permiso insuficiente -> cierre WS con policy violation (`1008`).
+La fuente de permisos es `vw_user_lagoons`.
 
 ---
 
 ## Componentes principales
 
-### FastAPI app (`app/main.py`)
-
-Responsable de:
-
-- registrar routers,
-- inicializar estado y watchdog,
-- configurar CORS.
-
-### Ingest router (`app/routers/ingest.py`)
-
-- endpoint: `POST /ingest/scada`
-- parsea payload `{lagoon_id, timestamp?, tags}`
-- persiste en hilo separado con timeout configurable (`INGEST_TIMEOUT_SEC`)
-- actualiza estado y hace broadcast WS
-
-### Ingest service (`app/services/ingest_service.py`)
-
-- detecta cambios de estado (`_last_state`)
-- cierra evento abierto y crea nuevo evento de `STATE_CHANGE`
-- mantiene buffer por minuto
-- hace upsert por lote en `scada_minute`
-
-### RealtimeStateStore (`app/state/store.py`)
-
-Mantiene por laguna:
-
-- tags actuales
-- ultimo timestamp (`ts`)
-- `pump_last_on`
-- `start_ts`
-- timezone
-
-Normaliza tags de valvulas de layout 2 (`ve237`, `ve238`, etc.) y calcula:
-
-- `plc_status` (`online`/`offline`)
-- `local_time`
-
-### WebSocketManager (`app/ws/manager.py`)
-
-- mantiene conexiones por `lagoon_id`
-- envia `snapshot` al conectar
-- envia `tick` en cada ingest
-
-### Historial (`app/scada/history/repo.py`)
-
-- selecciona resolucion (`hourly`, `daily`, `weekly`)
-- usa vista continua si existe (`source=view`)
-- fallback con `time_bucket` sobre `scada_minute` (`source=table`)
+- `app/main.py`: bootstrap, routers, lifecycle.
+- `app/routers/ingest.py`: ingest SCADA.
+- `app/services/ingest_service.py`: eventos y `scada_minute`.
+- `app/state/store.py`: estado realtime por laguna.
+- `app/ws/routes.py`: WebSocket SCADA.
+- `app/scada/history/repo.py`: historico con vista o fallback.
+- `app/layout_config/*`: servicio, repositorio y schemas de layout dinamico.
+- `app/routers/scada_layouts.py`: endpoints `/layouts` y `/lagoons/{id}/mapping`.
+- `app/alarms/*`: motor de alarmas.
+- `app/alarms/thresholds/*`: API de umbrales PT/FIT.
 
 ---
 
-## Endpoints activos
+## Layout SCADA dinamico
 
-### Publicos
+La arquitectura separa:
 
-- `GET /health`
-- `POST /auth/login`
+1. SVG visual estatico.
+2. Definicion del layout (`layouts.json_definition`).
+3. Mapping por laguna (`lagoon_layout_mapping.mapping_json`).
+4. Datos realtime (`tags` por WebSocket).
 
-### Ingest
+### Tabla `layouts`
 
-- `POST /ingest/scada` (x-api-key)
+Campos principales:
 
-Body:
+- `id`
+- `name`
+- `json_definition`
+- `created_at`
+- `updated_at`
+
+`json_definition.elements[]` puede contener:
 
 ```json
 {
-  "lagoon_id": "costa_del_lago",
-  "timestamp": "2026-03-13T14:30:45Z",
-  "tags": {
-    "bomba_1": 1,
-    "temperatura": 28.5
+  "id": "pressure_1",
+  "type": "kpi",
+  "fallback_tag": "PT117_R_SCADA",
+  "unit": "bar",
+  "default_label": "PT117_R_SCADA",
+  "position": { "left": "21.3%", "top": "40.3%" }
+}
+```
+
+Tipos usados por frontend:
+
+- `kpi`
+- `pump`
+- `valve`
+- `plc_status`
+
+Campos frecuentes:
+
+- `position`
+- `fallback_tag`
+- `default_label`
+- `unit`
+- `icon_type`
+- `panel`
+- `svg_target`
+- `always_visible`
+
+### Tabla `lagoon_layout_mapping`
+
+Campos principales:
+
+- `id`
+- `lagoon_id`
+- `layout_id`
+- `mapping_json`
+- `created_at`
+- `updated_at`
+
+Restriccion:
+
+- unico por `(lagoon_id, layout_id)`.
+
+`mapping_json`:
+
+```json
+{
+  "pressure_1": {
+    "tag": "PT117_R_SCADA",
+    "label": "PT_117"
+  },
+  "pump_retorno_clarificado": {
+    "tag": "P007_STS_SCADA",
+    "label": "Bomba Retorno Clarificado",
+    "svg_target": "BOMBA-RETORNO-CLARIFICADO"
   }
 }
 ```
 
-### SCADA general (bearer + rol lectura)
+### Validacion
 
-- `GET /scada/{lagoon_id}/last-minute`
-- `GET /scada/{lagoon_id}/current`
-- `GET /scada/{lagoon_id}/pump-events/last-3`
-- `GET /scada/history/{resolution}`
+- Las claves del mapping deben existir en `layout.json_definition.elements[].id`.
+- En `GET`, claves desconocidas vuelven como `warnings`.
+- En `PUT`, claves desconocidas generan `422`.
 
-`resolution` en path: `hourly|daily|weekly`.
+### Cache
 
-### RBAC por permisos
+- Layouts y mappings se cachean en memoria.
+- TTL: `SCADA_LAYOUT_CACHE_TTL_SEC` o `LAYOUT_CONFIG_CACHE_TTL_SEC`.
+- `PUT` invalida cache de la laguna.
+- `collector_tags` se refresca aunque haya mapping cacheado.
 
-- `GET /lagoons` -> requiere `can_view` (cualquier laguna)
-- `PUT /lagoons/{id}` -> requiere `can_edit` sobre `{id}`
-- `POST /control/pump` -> valida `can_control` sobre `cmd.lagoon_id`
+### Collector tags
 
-### APIs Crystal
+`collector_tag_registry` entrega los tags habilitados por collector para la laguna. El frontend usa ese arreglo para ocultar tarjetas cuyo tag no existe o no esta habilitado.
 
-- `GET /api/crystal/lagoons`
-- `GET /api/crystal/dashboard`
-- `GET /api/crystal/lagoons/{lagoon_id}/last-minute`
-- `GET /api/crystal/lagoons/{lagoon_id}/current`
-- `GET /api/crystal/lagoons/{lagoon_id}/pump-events/last-3`
-- `GET /api/crystal/history`
-- `GET /api/crystal/layout`
-- `PUT /api/crystal/layout`
-- `DELETE /api/crystal/layout`
-- `GET /api/crystal/tags`
-- `PUT /api/crystal/tags`
-- `DELETE /api/crystal/tags`
+---
 
-### APIs Small
+## Endpoints de layout
 
-- `GET /api/small/lagoons`
-- `GET /api/small/dashboard`
-- `GET /api/small/lagoons/{lagoon_id}/last-minute`
-- `GET /api/small/lagoons/{lagoon_id}/current`
-- `GET /api/small/lagoons/{lagoon_id}/pump-events/last-3`
-- `GET /api/small/history`
-- `POST /api/small/control`
-- `PUT /api/small/control`
-- `GET /api/small/chemicals`
-- `POST /api/small/chemicals`
-- `DELETE /api/small/chemicals`
+Generales:
 
-### WebSocket
+- `GET /layouts/{layout_id}`
+- `GET /api/layouts/{layout_id}`
+- `GET /lagoons/{lagoon_id}/mapping`
+- `GET /api/lagoons/{lagoon_id}/mapping`
+- `PUT /lagoons/{lagoon_id}/mapping`
+- `PUT /api/lagoons/{lagoon_id}/mapping`
+
+Producto:
+
+- `GET /api/crystal/lagoons/{lagoon_id}/layout-config`
+- `PUT /api/crystal/lagoons/{lagoon_id}/layout-config`
+- `GET /api/small/lagoons/{lagoon_id}/layout-config`
+- `PUT /api/small/lagoons/{lagoon_id}/layout-config`
+
+`layout-config` responde:
+
+```json
+{
+  "lagoon_id": "costa_del_lago",
+  "layout": {
+    "id": "layout2",
+    "name": "Crystal Layout 2",
+    "json_definition": { "elements": [] }
+  },
+  "mapping": {
+    "lagoon_id": "costa_del_lago",
+    "layout_id": "layout2",
+    "mapping_json": {},
+    "collector_tags": ["PT112_R_SCADA"],
+    "warnings": [],
+    "updated_at": "2026-04-09T20:00:00Z"
+  }
+}
+```
+
+---
+
+## Historico
+
+Implementacion: `app/scada/history/repo.py`.
+
+Reglas:
+
+1. Resolucion: `hourly|daily|weekly`.
+2. Si `end_date < start_date`, se invierte rango.
+3. Usa vista continua si existe.
+4. Si no, fallback con `time_bucket` sobre `scada_minute`.
+5. Respuesta de APIs de producto: `series[{tag, points}]`.
+
+---
+
+## WebSocket
+
+Endpoints:
 
 - `WS /ws/scada?lagoon_id=<id>&token=<jwt>`
 - `WS /ws/scada/{lagoon_id}?token=<jwt>`
 - `WS /ws/crystal/{lagoon_id}?token=<jwt>`
 - `WS /ws/small/{lagoon_id}?token=<jwt>`
 
----
+Payload relevante:
 
-## Flujos funcionales
-
-### Flujo de ingest
-
-1. Collector llama `POST /ingest/scada` con `x-api-key`.
-2. Router valida payload y define timestamp UTC.
-3. Router ejecuta `_persist_ingest(...)` en thread.
-4. `ingest_service.ingest(...)`:
-   - detecta cambios de estado,
-   - cierra/abre eventos en `scada_event`,
-   - flushea minutos cerrados en `scada_minute`.
-5. Router actualiza `RealtimeStateStore`.
-6. Router hace `ws_manager.broadcast(...)` con `tick_payload`.
-
-### Flujo de lectura REST
-
-- `last-minute`: ultimo bucket de `scada_minute`.
-- `current`: ultimo valor por tag para laguna.
-- `history`: vista continua o fallback, agrupa en `series`.
-- `pump-events/last-3`: lee `vw_scada_last_3_pump_actions`.
-
-### Flujo websocket
-
-1. Cliente abre WS con token y lagoon.
-2. Se valida permiso `can_view` para lagoon.
-3. Servidor envia `snapshot` inicial.
-4. En cada ingest se envia `tick` a conexiones de esa laguna.
+- `type`
+- `lagoon_id`
+- `ts`
+- `plc_status`
+- `local_time`
+- `timezone`
+- `scada_layout`
+- `tags`
+- `pump_last_on`
+- `start_ts`
 
 ---
 
 ## Modelos y vistas de datos
 
-### Tablas principales
+Tablas:
 
 - `lagoons`
-  - `id`, `name`, `plc_type`, `timezone`, `ip`, `scada_layout`, `product_type`
+- `layouts`
+- `lagoon_layout_mapping`
+- `collector_tag_registry`
 - `scada_event`
-  - `id`, `lagoon_id`, `tag_id`, `state`, `previous_state`, `start_ts`, `end_ts`, `duration_sec`
 - `scada_minute`
-  - `id`, `lagoon_id`, `tag_id`, `bucket`, `state`, `value_num`, `value_bool`
+- `alarm_definition`
+- `alarm_event`
+- `alarm_notification_rule`
 - `users`, `roles`, `user_roles`
 
-### Vistas y objetos usados por consultas
+Vistas:
 
-- `vw_scada_last_3_pump_actions`
 - `vw_user_lagoons`
-- `public.scada_minute_hourly`
-- `public.scada_minute_daily`
-- `public.scada_minute_weekly`
-
-Scripts relevantes:
-
-- `scripts/sql/create_rbac_tables.sql`
-- `scripts/seed_roles.py`
-- `scripts/sql/create_scada_continuous_aggregates.sql`
-
----
-
-## Configuracion operativa
-
-Variables requeridas:
-
-- `DATABASE_URL`
-- `COLLECTOR_API_KEY`
-- `JWT_SECRET_KEY`
-
-Variables comunes:
-
-- `JWT_ALGORITHM`
-- `JWT_ACCESS_TOKEN_EXPIRE_MINUTES`
-- `INGEST_TIMEOUT_SEC`
-- `SCADA_WATCHDOG_*`
-
-CORS permitidos por defecto:
-
-- `http://192.168.1.22`
-- `http://localhost:5173`
-- `http://localhost:3000`
-- `http://localhost:5174`
-- `http://localhost:8080`
+- `vw_scada_last_3_pump_actions`
+- `scada_minute_hourly`, `scada_minute_daily`, `scada_minute_weekly`
+- `vw_alarm_thresholds_pt_fit_lagoon`
 
 ---
 
 ## Referencias cruzadas
 
+- [ONE_PAGE_SUMMARY.md](./ONE_PAGE_SUMMARY.md)
 - [FLUJO_INSERCION.md](./FLUJO_INSERCION.md)
 - [GUIA_TECNICA_DESARROLLO.md](./GUIA_TECNICA_DESARROLLO.md)
-- [DIAGRAMAS_FLUJOS.md](./DIAGRAMAS_FLUJOS.md)
-- [CHANGELOG.md](./CHANGELOG.md)
+- [README_ALARM_THRESHOLDS_API.md](./README_ALARM_THRESHOLDS_API.md)

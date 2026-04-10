@@ -99,9 +99,10 @@ def _ensure_allowed_roles(
     error_detail: str = "Forbidden",
 ) -> dict:
     user_roles = set(extract_user_roles(user_payload))
-    required = {role for role in allowed_roles if role}
+    user_roles_lower = {role.lower() for role in user_roles}
+    required = {role.lower() for role in allowed_roles if role}
 
-    if required and not user_roles.intersection(required):
+    if required and not user_roles_lower.intersection(required):
         raise HTTPException(status_code=403, detail=error_detail)
 
     user_payload["roles"] = sorted(user_roles)

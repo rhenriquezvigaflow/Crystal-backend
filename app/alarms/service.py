@@ -705,7 +705,16 @@ def _tag_matches(
         return True
     if not tag_id:
         return False
-    return fnmatch(tag_id, pattern)
+
+    normalized_pattern = pattern.strip()
+    if not normalized_pattern:
+        return True
+
+    # Backward compatibility:
+    # historic DB rules used SQL-LIKE '%' wildcards.
+    normalized_pattern = normalized_pattern.replace("%", "*")
+
+    return fnmatch(tag_id, normalized_pattern)
 
 
 def _render_notification_message(

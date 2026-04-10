@@ -14,12 +14,11 @@ from app.auth.routers.lagoons_router import router as rbac_lagoons_router
 from app.routers.health import router as health_router
 from app.routers.ingest import router as ingest_router
 from app.routers.alarm_thresholds import router as alarm_thresholds_router
+from app.routers.scada_layouts import router as scada_layouts_router
 from app.routers.scada_read import router as scada_read_router
 from app.routers.scada_event import router as scada_event_router
 from app.scada.history.router import router as scada_history_router
 from app.routers.crystal.lagoons import router as crystal_lagoons_router
-from app.routers.crystal.layout import router as crystal_layout_router
-from app.routers.crystal.tags import router as crystal_tags_router
 from app.routers.small.lagoons import router as small_lagoons_router
 from app.routers.small.control import router as small_control_router
 from app.routers.small.chemicals import router as small_chemicals_router
@@ -30,9 +29,8 @@ from app.db.session import SessionLocal
 from app.alarms.silence_monitor import AlarmLagoonSignalMonitor
 from app.monitor.scada_watchdog import ScadaStallWatchdog
 from app.repositories.scada_event_repository import ScadaEventRepository
-from app.models.scada_event import ScadaEvent
-
 from app.models.lagoon import Lagoon
+from app.models.scada_event import ScadaEvent
 
 logger = get_logger("app.main")
 
@@ -47,17 +45,21 @@ async def lifespan(app: FastAPI):
 
     try:
         # =====================================================
-        # Cargar timezones desde tabla lagoons
+        # Cargar metadata de lagunas desde tabla lagoons
         # =====================================================
-        lagoons = db.query(Lagoon).all()
+        lagoons = db.query(Lagoon).filter(Lagoon.enable.is_(True)).all()
 
         for lagoon in lagoons:
             app.state.state_store.set_lagoon_timezone(
                 lagoon_id=lagoon.id,
                 timezone_str=lagoon.timezone,
             )
+            app.state.state_store.set_lagoon_layout(
+                lagoon_id=lagoon.id,
+                layout_name=lagoon.scada_layout,
+            )
 
-        logger.info("[BOOT] timezones_loaded count=%s", len(lagoons))
+        logger.info("[BOOT] lagoon_runtime_metadata_loaded count=%s", len(lagoons))
 
         # =====================================================
         #  Detectar lagunas con eventos
@@ -163,12 +165,12 @@ app.include_router(alarm_thresholds_router, prefix="/api")
 app.include_router(alarm_thresholds_router, prefix="/api/crystal")
 app.include_router(alarm_thresholds_router, prefix="/api/small")
 app.include_router(ws_router)
+app.include_router(scada_layouts_router)
+app.include_router(scada_layouts_router, prefix="/api")
 app.include_router(scada_read_router)
 app.include_router(scada_event_router)
 app.include_router(scada_history_router)
 app.include_router(crystal_lagoons_router)
-app.include_router(crystal_layout_router)
-app.include_router(crystal_tags_router)
 app.include_router(small_lagoons_router)
 app.include_router(small_control_router)
 app.include_router(small_chemicals_router)

@@ -5,6 +5,10 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from app.core.logging import get_logger
+from app.scada.layout_resolver import (
+    DEFAULT_SCADA_LAYOUT,
+    normalize_scada_layout,
+)
 
 logger = get_logger("state.store")
 
@@ -38,13 +42,32 @@ class RealtimeStateStore:
 
         # Nuevo: timezone por laguna (precargado desde BD)
         self._lagoon_timezone: Dict[str, str] = {}
+        self._lagoon_layout: Dict[str, str] = {}
 
     # =====================================================
     # CONFIG
     # =====================================================
 
-    def set_lagoon_timezone(self, lagoon_id: str, timezone_str: str):
-        self._lagoon_timezone[lagoon_id] = timezone_str
+    def set_lagoon_timezone(
+        self,
+        lagoon_id: str,
+        timezone_str: str | None,
+    ):
+        if isinstance(timezone_str, str) and timezone_str.strip():
+            self._lagoon_timezone[lagoon_id] = timezone_str.strip()
+            return
+
+        self._lagoon_timezone.pop(lagoon_id, None)
+
+    def set_lagoon_layout(
+        self,
+        lagoon_id: str,
+        layout_name: str | None,
+    ):
+        self._lagoon_layout[lagoon_id] = normalize_scada_layout(layout_name)
+
+    def get_lagoon_layout(self, lagoon_id: str) -> str:
+        return self._lagoon_layout.get(lagoon_id, DEFAULT_SCADA_LAYOUT)
 
     def preload_state(self, lagoon_id: str, tags: Dict[str, Any]):
         self._tags[lagoon_id].update(tags)
@@ -201,6 +224,7 @@ class RealtimeStateStore:
             "plc_status": self._compute_plc_status(lagoon_id),
             "local_time": self._compute_local_time(lagoon_id),
             "timezone": self._lagoon_timezone.get(lagoon_id),
+            "scada_layout": self.get_lagoon_layout(lagoon_id),
             "tags": self._payload_tags(lagoon_id),
             "pump_last_on": dict(self._pump_last_on.get(lagoon_id, {})),
             "start_ts": self._start_ts.get(lagoon_id),

@@ -5,6 +5,9 @@ from pydantic import BaseModel
 from datetime import datetime, timezone
 from typing import Optional
 
+from sqlalchemy import bindparam, text
+from sqlalchemy.dialects.postgresql import JSONB
+
 from app.alarms.notifier import dispatch_notifications
 from app.alarms.service import evaluate_alarms
 from app.core.logging import get_logger
@@ -15,6 +18,19 @@ from app.security.api_key import verify_collector_key
 router = APIRouter()
 logger = get_logger("api.ingest")
 INGEST_TIMEOUT_SEC = float(os.getenv("INGEST_TIMEOUT_SEC", "125"))
+SYNC_COLLECTOR_TAGS_SQL = text(
+    """
+    SELECT CASE
+        WHEN to_regproc('public.sp_sync_collector_tags_and_alarms') IS NULL
+            THEN NULL
+        ELSE public.sp_sync_collector_tags_and_alarms(
+            :lagoon_id,
+            :source_ts,
+            :tags_payload
+        )
+    END AS sync_result
+    """
+).bindparams(bindparam("tags_payload", type_=JSONB))
 
 
 class IngestPayload(BaseModel):
@@ -23,12 +39,57 @@ class IngestPayload(BaseModel):
     tags: dict
 
 
+def _sync_collector_tags_and_alarms(
+    *,
+    db,
+    lagoon_id: str,
+    source_ts: datetime,
+    tags: dict,
+) -> None:
+    if not tags:
+        return
+
+    try:
+        result = db.execute(
+            SYNC_COLLECTOR_TAGS_SQL,
+            {
+                "lagoon_id": lagoon_id,
+                "source_ts": source_ts,
+                "tags_payload": tags,
+            },
+        ).scalar_one_or_none()
+
+        if isinstance(result, dict):
+            registered_tags = int(result.get("registered_tags") or 0)
+            new_alarm_definitions = int(result.get("new_alarm_definitions") or 0)
+
+            if registered_tags or new_alarm_definitions:
+                logger.info(
+                    "[INGEST TAG SYNC] lagoon_id=%s registered_tags=%s new_alarm_definitions=%s",
+                    lagoon_id,
+                    registered_tags,
+                    new_alarm_definitions,
+                )
+    except Exception:
+        logger.exception(
+            "[INGEST TAG SYNC ERROR] lagoon_id=%s",
+            lagoon_id,
+        )
+
+
 def _persist_ingest(lagoon_id: str, ts_dt: datetime, tags: dict):
     notification_jobs = []
     transition_count = 0
 
     db = SessionLocal()
     try:
+        _sync_collector_tags_and_alarms(
+            db=db,
+            lagoon_id=lagoon_id,
+            source_ts=ts_dt,
+            tags=tags,
+        )
+
         pump_last_on_updates = ingest(
             lagoon_id=lagoon_id,
             ts=ts_dt,

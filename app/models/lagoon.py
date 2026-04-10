@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, Enum as SQLEnum, String
+from sqlalchemy import Boolean, DateTime, Enum as SQLEnum, String, text
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -16,6 +16,13 @@ class Lagoon(Base):
     timezone: Mapped[str | None] = mapped_column(String, nullable=True)
     ip: Mapped[str | None] = mapped_column(String, nullable=True)
     scada_layout: Mapped[str | None] = mapped_column(String, nullable=True)
+    enable: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=True,
+        server_default=text("true"),
+        index=True,
+    )
     product_type: Mapped[ProductType] = mapped_column(
         SQLEnum(
             ProductType,
