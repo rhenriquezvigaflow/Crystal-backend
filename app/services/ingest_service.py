@@ -1,32 +1,22 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Dict, Tuple, Any, List
 from threading import Lock
+from typing import Any
 
-from sqlalchemy.orm import Session
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
-from app.models.scada_minute import ScadaMinute
 from app.models.scada_event import ScadaEvent
-from app.scada.value_codec import (
-    is_state_or_bool_value,
-    to_storage_fields,
-)
-
-# =========================================================
-# GLOBAL RUNTIME STATE
-# =========================================================
+from app.models.scada_minute import ScadaMinute
+from app.scada.value_codec import is_state_or_bool_value, to_storage_fields
 
 _lock = Lock()
 
-_minute_buffer: Dict[
-    Tuple[str, datetime],
-    Dict[str, List[Any]]
-] = {}
-
-_last_state: Dict[tuple[str, str], Any] = {}
+_last_state: dict[tuple[str, str], Any] = {}
+_minute_buffers: dict[str, "_LagoonMinuteBuffer"] = {}
 
 _runtime_metrics = {
     "last_ingest_utc": None,
@@ -38,21 +28,87 @@ _runtime_metrics = {
 logger = get_logger("services.ingest")
 
 
-# =========================================================
-# PUBLIC HELPERS
-# =========================================================
+@dataclass(slots=True)
+class ScadaEventWrite:
+    action: str
+    lagoon_id: str
+    tag_id: str
+    previous_state: int | None
+    state: int | None
+    happened_at: datetime
+    duration_sec: int | None = None
 
-def initialize_last_state(lagoon_id: str, states: Dict[str, Any]):
+
+@dataclass(slots=True)
+class IngestWriteSummary:
+    lagoon_id: str
+    bucket_utc: datetime | None
+    minute_rows: int
+    detected_event_count: int
+    event_writes: list[ScadaEventWrite]
+
+
+@dataclass(slots=True)
+class _LagoonMinuteBuffer:
+    bucket_utc: datetime
+    tags: dict[str, Any]
+
+
+def initialize_last_state(lagoon_id: str, states: dict[str, Any]) -> None:
     for tag_id, value in states.items():
         _last_state[(lagoon_id, tag_id)] = value
 
 
-def get_runtime_metrics():
+def get_runtime_metrics() -> dict[str, Any]:
     return _runtime_metrics.copy()
+
+
+def log_persisted_ingest(summary: IngestWriteSummary) -> None:
+    if summary.minute_rows == 0 and summary.detected_event_count == 0:
+        return
+
+    if summary.minute_rows > 0 and summary.bucket_utc is not None:
+        logger.info(
+            "[INGEST DB] lagoon=%s bucket=%s rows=%s events=%s",
+            summary.lagoon_id,
+            summary.bucket_utc.isoformat(),
+            summary.minute_rows,
+            summary.detected_event_count,
+        )
+
+    for event in summary.event_writes:
+        if event.action == "CLOSE":
+            logger.info(
+                "[SCADA EVENT CLOSE] lagoon=%s tag=%s previous=%s current=%s at=%s duration_sec=%s",
+                event.lagoon_id,
+                event.tag_id,
+                event.previous_state,
+                event.state,
+                event.happened_at.isoformat(),
+                event.duration_sec,
+            )
+            continue
+
+        logger.info(
+            "[SCADA EVENT OPEN] lagoon=%s tag=%s previous=%s current=%s at=%s",
+            event.lagoon_id,
+            event.tag_id,
+            event.previous_state,
+            event.state,
+            event.happened_at.isoformat(),
+        )
 
 
 def _bucket_minute(ts: datetime) -> datetime:
     return ts.replace(second=0, microsecond=0)
+
+
+def _to_running_state(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return value > 0
+    return False
 
 
 def reset_runtime_state(
@@ -68,20 +124,17 @@ def reset_runtime_state(
         return False
 
     try:
-        minute_keys = len(_minute_buffer)
         state_keys = len(_last_state)
-
-        _minute_buffer.clear()
+        minute_buffers = len(_minute_buffers)
         _last_state.clear()
-
+        _minute_buffers.clear()
         logger.info(
-            "[INGEST RESET] reason=%s cleared minute_buffer=%s last_state=%s",
+            "[INGEST RESET] reason=%s cleared_last_state=%s cleared_minute_buffers=%s",
             reason,
-            minute_keys,
             state_keys,
+            minute_buffers,
         )
         return True
-
     finally:
         _lock.release()
 
@@ -91,22 +144,16 @@ def ingest(
     ts: datetime,
     tags: dict,
     db: Session,
-):
-
+) -> tuple[dict[str, str], IngestWriteSummary]:
     bucket = _bucket_minute(ts)
-
-    detected_events: List[tuple[str, Any, Any]] = []
-    flush_rows: List[dict] = []
-
+    detected_events: list[tuple[str, Any, Any]] = []
+    pump_last_on_updates: dict[str, str] = {}
+    event_writes: list[ScadaEventWrite] = []
+    minute_bucket_to_persist: datetime | None = None
+    minute_tags_to_persist: dict[str, Any] = {}
 
     with _lock:
-
-        key = (lagoon_id, bucket)
-        _minute_buffer.setdefault(key, {})
-
-        # Detect state changes
         for tag_id, value in tags.items():
-
             if not is_state_or_bool_value(value):
                 continue
 
@@ -117,49 +164,54 @@ def ingest(
                 _last_state[state_key] = value
                 continue
 
-            if previous != value:
-                detected_events.append((tag_id, previous, value))
-                _last_state[state_key] = value
+            if previous == value:
+                continue
 
-        for tag_id, value in tags.items():
-            _minute_buffer[key].setdefault(tag_id, []).append(value)
+            detected_events.append((tag_id, previous, value))
+            _last_state[state_key] = value
 
-        flush_keys = [
-            k for k in list(_minute_buffer.keys())
-            if k[0] == lagoon_id and k[1] < bucket
-        ]
+            if not _to_running_state(previous) and _to_running_state(value):
+                pump_last_on_updates[tag_id] = ts.isoformat()
 
-        for fk in flush_keys:
-            lagoon_id_fk, bucket_fk = fk
-            tag_dict = _minute_buffer.pop(fk, {})
+        current_buffer = _minute_buffers.get(lagoon_id)
+        incoming_tags = dict(tags)
+        if current_buffer is None:
+            _minute_buffers[lagoon_id] = _LagoonMinuteBuffer(
+                bucket_utc=bucket,
+                tags=incoming_tags,
+            )
+        elif bucket == current_buffer.bucket_utc:
+            current_buffer.tags.update(incoming_tags)
+        elif bucket > current_buffer.bucket_utc:
+            minute_bucket_to_persist = current_buffer.bucket_utc
+            minute_tags_to_persist = dict(current_buffer.tags)
+            _minute_buffers[lagoon_id] = _LagoonMinuteBuffer(
+                bucket_utc=bucket,
+                tags=incoming_tags,
+            )
+        else:
+            logger.warning(
+                "[INGEST OUT OF ORDER] lagoon=%s incoming_bucket=%s buffered_bucket=%s",
+                lagoon_id,
+                bucket.isoformat(),
+                current_buffer.bucket_utc.isoformat(),
+            )
 
-            for tag_id, values in tag_dict.items():
-
-                last_val = values[-1]
-
-                state, value_num, value_bool = to_storage_fields(last_val)
-
-                flush_rows.append({
-                    "lagoon_id": lagoon_id_fk,
-                    "tag_id": tag_id,
-                    "bucket": bucket_fk,
-                    "state": state,
-                    "value_num": value_num,
-                    "value_bool": value_bool,
-                })
-
-
-
-    for tag_id, previous, value in detected_events:
-
-        logger.info(
-            "[EVENT DETECTED] lagoon_id=%s tag_id=%s previous=%s current=%s",
-            lagoon_id,
-            tag_id,
-            previous,
-            value,
+    upsert_rows: list[dict[str, Any]] = []
+    for tag_id, value in minute_tags_to_persist.items():
+        state, value_num, value_bool = to_storage_fields(value)
+        upsert_rows.append(
+            {
+                "lagoon_id": lagoon_id,
+                "tag_id": tag_id,
+                "bucket": minute_bucket_to_persist,
+                "state": state,
+                "value_num": value_num,
+                "value_bool": value_bool,
+            }
         )
 
+    for tag_id, previous, value in detected_events:
         open_event = (
             db.query(ScadaEvent)
             .filter(
@@ -172,17 +224,19 @@ def ingest(
         )
 
         if open_event:
-            duration = int(
-                (ts - open_event.start_ts).total_seconds()
-            )
+            duration = int((ts - open_event.start_ts).total_seconds())
             open_event.end_ts = ts
             open_event.duration_sec = duration
-
-            logger.info(
-                "[EVENT CLOSED] lagoon_id=%s tag_id=%s duration_sec=%s",
-                lagoon_id,
-                tag_id,
-                duration,
+            event_writes.append(
+                ScadaEventWrite(
+                    action="CLOSE",
+                    lagoon_id=lagoon_id,
+                    tag_id=tag_id,
+                    previous_state=int(previous),
+                    state=int(value),
+                    happened_at=ts,
+                    duration_sec=duration,
+                )
             )
 
         new_event = ScadaEvent(
@@ -194,40 +248,44 @@ def ingest(
             state=int(value),
             alert_type="STATE_CHANGE",
         )
-
         db.add(new_event)
-
-        print(
-            f"[EVENT INSERTED] "
-            f"{lagoon_id} {tag_id}"
+        event_writes.append(
+            ScadaEventWrite(
+                action="OPEN",
+                lagoon_id=lagoon_id,
+                tag_id=tag_id,
+                previous_state=int(previous),
+                state=int(value),
+                happened_at=ts,
+            )
         )
 
-    if flush_rows:
-
-        stmt = insert(ScadaMinute).values(flush_rows)
-
+    if upsert_rows:
+        stmt = insert(ScadaMinute).values(upsert_rows)
         stmt = stmt.on_conflict_do_update(
             index_elements=["lagoon_id", "tag_id", "bucket"],
             set_={
                 "state": stmt.excluded.state,
                 "value_num": stmt.excluded.value_num,
                 "value_bool": stmt.excluded.value_bool,
+                "updated_at": datetime.now(timezone.utc),
             },
         )
 
         db.execute(stmt)
 
-        print(
-            f"[BATCH MINUTE UPSERT] "
-            f"utc={datetime.now(timezone.utc).isoformat()} "
-            f"lagoon={lagoon_id} "
-            f"bucket_utc={bucket.isoformat()} "
-            f"rows={len(flush_rows)} "
-            f"events={len(detected_events)}"
-        )
-
-    # -------------------------
     _runtime_metrics["last_ingest_utc"] = datetime.now(timezone.utc)
     _runtime_metrics["last_lagoon"] = lagoon_id
-    _runtime_metrics["last_minute_rows"] = len(flush_rows)
+    _runtime_metrics["last_minute_rows"] = len(upsert_rows)
     _runtime_metrics["last_event_count"] = len(detected_events)
+
+    return (
+        pump_last_on_updates,
+        IngestWriteSummary(
+            lagoon_id=lagoon_id,
+            bucket_utc=minute_bucket_to_persist,
+            minute_rows=len(upsert_rows),
+            detected_event_count=len(detected_events),
+            event_writes=event_writes,
+        ),
+    )

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from app.auth.services.lagoon_service import PERMISSION_VIEW, ensure_lagoon_access
@@ -52,6 +52,7 @@ def last_minute(
 @router.get("/{lagoon_id}/current", response_model=ScadaCurrent)
 def current(
     lagoon_id: str,
+    request: Request,
     db: Session = Depends(get_db),
     user: dict = Depends(require_roles(ALL_READ_ROLES)),
 ):
@@ -64,7 +65,11 @@ def current(
         lagoon_id=lagoon_id,
         permission=PERMISSION_VIEW,
     )
-    data = get_current(lagoon_id, db)
+    data = get_current(
+        lagoon_id,
+        db,
+        state_store=getattr(request.app.state, "state_store", None),
+    )
     if not data:
         raise HTTPException(404, "No data")
     logger.info(

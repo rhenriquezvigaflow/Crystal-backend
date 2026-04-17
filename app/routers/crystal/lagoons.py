@@ -240,6 +240,7 @@ def crystal_last_minute(
 @router.get("/lagoons/{lagoon_id}/current", response_model=ScadaCurrent)
 def crystal_current(
     lagoon_id: str,
+    request: Request,
     db: Session = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
@@ -255,7 +256,11 @@ def crystal_current(
         permission=PERMISSION_VIEW,
         expected_product_type=ProductType.CRYSTAL,
     )
-    data = get_current(lagoon_id, db)
+    data = get_current(
+        lagoon_id,
+        db,
+        state_store=getattr(request.app.state, "state_store", None),
+    )
     if not data:
         logger.warning(
             "[API] endpoint_response_summary endpoint=/api/crystal/lagoons/%s/current user_id=%s result=no_data",

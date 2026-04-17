@@ -13,6 +13,7 @@ from app.alarms.models import (
     AlarmEvent,
     AlarmNotificationRule,
 )
+from app.models.lagoon import Lagoon
 from app.models.scada_event import ScadaEvent
 
 
@@ -124,6 +125,17 @@ class AlarmRepository:
                 AlarmDefinition.code == code,
             )
             .first()
+        )
+
+    @staticmethod
+    def get_lagoon_name(
+        db: Session,
+        lagoon_id: str,
+    ) -> str | None:
+        return (
+            db.query(Lagoon.name)
+            .filter(Lagoon.id == lagoon_id)
+            .scalar()
         )
 
     @staticmethod

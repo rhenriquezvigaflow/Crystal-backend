@@ -2,16 +2,18 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
 
 from app.auth.jwt import create_token
 from app.auth.password import hash_password as _hash_password
 from app.auth.services.auth_service import authenticate_user, build_login_response
+from app.core.logging import get_logger
 from app.db.session import get_db
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
+logger = get_logger("auth.login")
 
 
 class LoginRequest(BaseModel):
@@ -46,10 +48,23 @@ def hash_password(password: str) -> str:
 
 
 @router.post("/login", response_model=TokenResponse)
-def login(payload: LoginRequest, db: Session = Depends(get_db)):
+def login(
+    payload: LoginRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
     user = authenticate_user(
         db=db,
         email=str(payload.email),
         password=payload.password,
     )
-    return build_login_response(user)
+    response = build_login_response(user)
+    client_ip = request.client.host if request.client else "-"
+    logger.info(
+        "[LOGIN OK] user_id=%s email=%s roles=%s ip=%s",
+        response["user"]["id"],
+        response["user"]["email"],
+        response["user"]["roles"],
+        client_ip,
+    )
+    return response

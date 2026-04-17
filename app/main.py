@@ -1,25 +1,23 @@
 import app.models
 import app.alarms.models
 
-import os
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
+from app.core.config import settings
 from app.core.logging import get_logger
-from app.ws.routes import router as ws_router
+from app.routers.websocket import router as websocket_router
 from app.auth.auth import router as auth_router
 from app.auth.routers.lagoons_router import router as rbac_lagoons_router
 from app.routers.health import router as health_router
 from app.routers.ingest import router as ingest_router
 from app.routers.alarm_thresholds import router as alarm_thresholds_router
+from app.routers.email import router as email_router
 from app.routers.scada_layouts import router as scada_layouts_router
-from app.routers.scada_read import router as scada_read_router
-from app.routers.scada_event import router as scada_event_router
-from app.scada.history.router import router as scada_history_router
-from app.routers.crystal.lagoons import router as crystal_lagoons_router
-from app.routers.small.lagoons import router as small_lagoons_router
+from app.routers.scada import router as scada_router
+from app.routers.events import router as scada_events_router
 from app.routers.small.control import router as small_control_router
 from app.routers.small.chemicals import router as small_chemicals_router
 
@@ -33,6 +31,10 @@ from app.models.lagoon import Lagoon
 from app.models.scada_event import ScadaEvent
 
 logger = get_logger("app.main")
+
+settings.validate_runtime_security()
+for warning in settings.security_warnings():
+    logger.warning("Security warning: %s", warning)
 
 
 @asynccontextmanager
@@ -59,7 +61,7 @@ async def lifespan(app: FastAPI):
                 layout_name=lagoon.scada_layout,
             )
 
-        logger.info("[BOOT] lagoon_runtime_metadata_loaded count=%s", len(lagoons))
+        logger.info("Loaded lagoon runtime metadata count=%s", len(lagoons))
 
         # =====================================================
         #  Detectar lagunas con eventos
@@ -72,7 +74,7 @@ async def lifespan(app: FastAPI):
 
         lagoon_ids = [row[0] for row in lagoon_ids]
 
-        logger.info("[BOOT] event_lagoons_detected lagoon_ids=%s", lagoon_ids)
+        logger.info("Found lagoons with events lagoon_ids=%s", lagoon_ids)
 
         # =====================================================
         #  Precargar ultimo start_ts por bomba
@@ -92,13 +94,13 @@ async def lifespan(app: FastAPI):
                     )
 
                 logger.info(
-                    "[BOOT] pump_last_on_initialized lagoon_id=%s tags=%s",
+                    "Initialized last pump-on lagoon=%s tags=%s",
                     lagoon_id,
                     len(last_times),
                 )
             else:
                 logger.info(
-                    "[BOOT] pump_last_on_skipped lagoon_id=%s reason=no_previous_state",
+                    "Skipped pump-on preload lagoon=%s reason=no_previous_state",
                     lagoon_id,
                 )
 
@@ -119,39 +121,28 @@ async def lifespan(app: FastAPI):
 
 
 
-app = FastAPI(lifespan=lifespan)
-
-proxy_trusted_hosts = [
-    host.strip()
-    for host in os.getenv(
-        "PROXY_TRUSTED_HOSTS",
-        "127.0.0.1,::1,localhost",
-    ).split(",")
-    if host.strip()
-]
-
-app.add_middleware(
-    ProxyHeadersMiddleware,
-    trusted_hosts=proxy_trusted_hosts,
+app = FastAPI(
+    lifespan=lifespan,
+    root_path="/api"
 )
 
-origins = [
-    "https://localhost",
-    "http://localhost",
-    "http://localhost:5173",
-    "https://localhost:5173",
-    "http://192.168.1.22",
-    "http://localhost:3000",
-    "http://localhost:5174",
-    "http://localhost:8080",
-]
+if settings.PROXY_HEADERS_ENABLED:
+    app.add_middleware(
+        ProxyHeadersMiddleware,
+        trusted_hosts=settings.proxy_trusted_hosts,
+    )
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=settings.cors_allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "OPTIONS"],
+    allow_headers=[
+        "Authorization",
+        "Content-Type",
+        "X-Api-Key",
+        "Sec-WebSocket-Protocol",
+    ],
 )
 
 app.include_router(health_router)
@@ -159,18 +150,11 @@ app.include_router(auth_router)
 app.include_router(rbac_lagoons_router)
 app.include_router(ingest_router)
 app.include_router(alarm_thresholds_router)
-app.include_router(alarm_thresholds_router, prefix="/crystal")
-app.include_router(alarm_thresholds_router, prefix="/small")
-app.include_router(alarm_thresholds_router, prefix="/api")
-app.include_router(alarm_thresholds_router, prefix="/api/crystal")
-app.include_router(alarm_thresholds_router, prefix="/api/small")
-app.include_router(ws_router)
+app.include_router(email_router)
+app.include_router(websocket_router)
 app.include_router(scada_layouts_router)
-app.include_router(scada_layouts_router, prefix="/api")
-app.include_router(scada_read_router)
-app.include_router(scada_event_router)
-app.include_router(scada_history_router)
-app.include_router(crystal_lagoons_router)
-app.include_router(small_lagoons_router)
+app.include_router(scada_router)
+app.include_router(scada_events_router)
 app.include_router(small_control_router)
 app.include_router(small_chemicals_router)
+

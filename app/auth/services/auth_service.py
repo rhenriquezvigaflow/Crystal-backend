@@ -7,7 +7,10 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.auth.jwt import ACCESS_TOKEN_EXPIRE_MINUTES, create_token
 from app.auth.password import verify_password
+from app.core.logging import get_logger
 from app.models.user import User
+
+logger = get_logger("auth.login")
 
 
 def _normalize_roles(values: list[str]) -> list[str]:
@@ -49,12 +52,23 @@ def authenticate_user(db: Session, email: str, password: str) -> User:
 
     user = query.filter(User.email == email).first()
     if not user:
+        logger.warning("[LOGIN FAIL] email=%s reason=user_not_found", email)
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
     if not user.is_active:
+        logger.warning(
+            "[LOGIN FAIL] email=%s user_id=%s reason=user_disabled",
+            email,
+            user.id,
+        )
         raise HTTPException(status_code=403, detail="User disabled")
 
     if not verify_password(password, user.password_hash):
+        logger.warning(
+            "[LOGIN FAIL] email=%s user_id=%s reason=invalid_password",
+            email,
+            user.id,
+        )
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
     return user
@@ -63,6 +77,11 @@ def authenticate_user(db: Session, email: str, password: str) -> User:
 def build_login_response(user: User) -> dict[str, Any]:
     user_roles = extract_user_roles(user)
     if not user_roles:
+        logger.warning(
+            "[LOGIN FAIL] email=%s user_id=%s reason=no_roles_assigned",
+            user.email,
+            user.id,
+        )
         raise HTTPException(status_code=403, detail="User has no assigned roles")
 
     primary_role = user_roles[0]

@@ -3,11 +3,11 @@ import asyncio
 from typing import Optional
 
 from app.alarms.notifier import dispatch_notifications
-from app.alarms.service import evaluate_alarms
+from app.alarms.service import evaluate_alarms, log_persisted_alarm_transitions
 from app.core.logging import get_logger
 from app.persist.queue import persist_queue
 from app.db.session import SessionLocal
-from app.services.ingest_service import ingest
+from app.services.ingest_service import ingest, log_persisted_ingest
 
 logger = get_logger("persist.worker")
 
@@ -34,13 +34,13 @@ class PersistWorker:
 
             db = SessionLocal()
             try:
-                ingest(
+                _, ingest_summary = ingest(
                     lagoon_id=tick.lagoon_id,
                     ts=tick.timestamp,
                     tags=tick.tags,
                     db=db,
                 )
-                _, notification_jobs = evaluate_alarms(
+                transitions, notification_jobs = evaluate_alarms(
                     payload={
                         "lagoon_id": tick.lagoon_id,
                         "timestamp": tick.timestamp,
@@ -49,6 +49,8 @@ class PersistWorker:
                     db=db,
                 )
                 db.commit()
+                log_persisted_ingest(ingest_summary)
+                log_persisted_alarm_transitions(transitions)
 
                 if notification_jobs:
                     try:

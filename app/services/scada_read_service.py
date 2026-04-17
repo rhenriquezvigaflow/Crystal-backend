@@ -1,6 +1,7 @@
 from sqlalchemy.orm import Session
 from app.repositories.scada_read_repository import ScadaReadRepository
 from app.scada.value_codec import from_storage_fields
+from app.state.store import RealtimeStateStore
 
 
 def build_tags(rows):
@@ -32,6 +33,24 @@ def _build_scada_response(lagoon_id: str, ts, rows):
     }
 
 
+def _build_realtime_response(
+    lagoon_id: str,
+    state_store: RealtimeStateStore,
+):
+    snapshot = state_store.snapshot(lagoon_id)
+    ts = snapshot.get("ts")
+    tags = snapshot.get("tags")
+
+    if ts is None or not isinstance(tags, dict) or not tags:
+        return None
+
+    return {
+        "lagoon_id": lagoon_id,
+        "ts": ts,
+        "tags": tags,
+    }
+
+
 def get_last_minute(lagoon_id: str, db: Session):
     bucket, rows = ScadaReadRepository.get_last_minute(db, lagoon_id)
     if not rows:
@@ -40,7 +59,16 @@ def get_last_minute(lagoon_id: str, db: Session):
     return _build_scada_response(lagoon_id, bucket, rows)
 
 
-def get_current(lagoon_id: str, db: Session):
+def get_current(
+    lagoon_id: str,
+    db: Session,
+    state_store: RealtimeStateStore | None = None,
+):
+    if state_store is not None:
+        realtime = _build_realtime_response(lagoon_id, state_store)
+        if realtime is not None:
+            return realtime
+
     rows = ScadaReadRepository.get_current(db, lagoon_id)
     if not rows:
         return None

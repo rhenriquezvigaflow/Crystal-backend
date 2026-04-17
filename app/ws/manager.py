@@ -44,13 +44,24 @@ class WebSocketManager:
         async with self._lock:
             self._connections[lagoon_id].add(websocket)
             count = len(self._connections[lagoon_id])
-        logger.info(
+        logger.debug(
             "[WS MANAGER CONNECT] lagoon_id=%s client=%s:%s connections=%s",
             lagoon_id,
             getattr(websocket.client, "host", "unknown"),
             getattr(websocket.client, "port", "unknown"),
             count,
         )
+
+    def stats(self) -> dict[str, object]:
+        lagoon_counts = {
+            lagoon_id: len(sockets)
+            for lagoon_id, sockets in self._connections.items()
+        }
+        return {
+            "lagoon_count": len(lagoon_counts),
+            "total_connections": sum(lagoon_counts.values()),
+            "connections_by_lagoon": lagoon_counts,
+        }
 
     async def disconnect(self, lagoon_id: str, websocket: WebSocket) -> None:
         async with self._lock:
@@ -63,7 +74,7 @@ class WebSocketManager:
                     count = len(self._connections[lagoon_id])
             else:
                 count = 0
-        logger.info(
+        logger.debug(
             "[WS MANAGER DISCONNECT] lagoon_id=%s client=%s:%s connections=%s",
             lagoon_id,
             getattr(websocket.client, "host", "unknown"),

@@ -9,10 +9,10 @@ from sqlalchemy import bindparam, text
 from sqlalchemy.dialects.postgresql import JSONB
 
 from app.alarms.notifier import dispatch_notifications
-from app.alarms.service import evaluate_alarms
+from app.alarms.service import evaluate_alarms, log_persisted_alarm_transitions
 from app.core.logging import get_logger
 from app.db.session import SessionLocal
-from app.services.ingest_service import ingest
+from app.services.ingest_service import ingest, log_persisted_ingest
 from app.security.api_key import verify_collector_key
 
 router = APIRouter()
@@ -45,9 +45,9 @@ def _sync_collector_tags_and_alarms(
     lagoon_id: str,
     source_ts: datetime,
     tags: dict,
-) -> None:
+) -> tuple[int, int]:
     if not tags:
-        return
+        return 0, 0
 
     try:
         result = db.execute(
@@ -60,42 +60,41 @@ def _sync_collector_tags_and_alarms(
         ).scalar_one_or_none()
 
         if isinstance(result, dict):
-            registered_tags = int(result.get("registered_tags") or 0)
-            new_alarm_definitions = int(result.get("new_alarm_definitions") or 0)
-
-            if registered_tags or new_alarm_definitions:
-                logger.info(
-                    "[INGEST TAG SYNC] lagoon_id=%s registered_tags=%s new_alarm_definitions=%s",
-                    lagoon_id,
-                    registered_tags,
-                    new_alarm_definitions,
-                )
+            return (
+                int(result.get("registered_tags") or 0),
+                int(result.get("new_alarm_definitions") or 0),
+            )
     except Exception:
         logger.exception(
-            "[INGEST TAG SYNC ERROR] lagoon_id=%s",
+            "[INGEST SYNC ERROR] lagoon=%s",
             lagoon_id,
         )
+    return 0, 0
 
 
 def _persist_ingest(lagoon_id: str, ts_dt: datetime, tags: dict):
     notification_jobs = []
     transition_count = 0
+    minute_row_count = 0
+    event_count = 0
 
     db = SessionLocal()
     try:
-        _sync_collector_tags_and_alarms(
+        sync_registered_tags, sync_new_alarm_definitions = _sync_collector_tags_and_alarms(
             db=db,
             lagoon_id=lagoon_id,
             source_ts=ts_dt,
             tags=tags,
         )
 
-        pump_last_on_updates = ingest(
+        pump_last_on_updates, ingest_summary = ingest(
             lagoon_id=lagoon_id,
             ts=ts_dt,
             tags=tags,
             db=db,
         )
+        minute_row_count = ingest_summary.minute_rows
+        event_count = ingest_summary.detected_event_count
 
         transitions, notification_jobs = evaluate_alarms(
             payload={
@@ -108,6 +107,15 @@ def _persist_ingest(lagoon_id: str, ts_dt: datetime, tags: dict):
         transition_count = len(transitions)
 
         db.commit()
+        if sync_registered_tags or sync_new_alarm_definitions:
+            logger.info(
+                "[INGEST SYNC] lagoon=%s tags=%s alarms=%s",
+                lagoon_id,
+                sync_registered_tags,
+                sync_new_alarm_definitions,
+            )
+        log_persisted_ingest(ingest_summary)
+        log_persisted_alarm_transitions(transitions)
     except Exception:
         db.rollback()
         raise
@@ -119,11 +127,11 @@ def _persist_ingest(lagoon_id: str, ts_dt: datetime, tags: dict):
             dispatch_notifications(notification_jobs)
         except Exception:
             logger.exception(
-                "[ERROR NOTIFICADOR ALARMAS] lagoon_id=%s",
+                "[NOTIFY ERROR] lagoon=%s reason=dispatch_failed",
                 lagoon_id,
             )
 
-    return pump_last_on_updates, transition_count
+    return pump_last_on_updates, transition_count, minute_row_count, event_count
 
 
 @router.post("/ingest/scada")
@@ -147,9 +155,15 @@ async def ingest_scada(
         ts_dt = datetime.now(timezone.utc)
 
     ts_iso = ts_dt.isoformat()
+    client_ip = request.client.host if request.client else "-"
 
     try:
-        pump_last_on_updates, alarm_transition_count = await asyncio.wait_for(
+        (
+            pump_last_on_updates,
+            alarm_transition_count,
+            minute_row_count,
+            scada_event_count,
+        ) = await asyncio.wait_for(
             asyncio.to_thread(
                 _persist_ingest,
                 lagoon_id,
@@ -160,8 +174,9 @@ async def ingest_scada(
         )
     except asyncio.TimeoutError:
         logger.warning(
-            "[INGEST TIMEOUT] lagoon_id=%s timeout_sec=%s",
+            "[INGEST TIMEOUT] lagoon=%s ip=%s timeout_sec=%s",
             lagoon_id,
+            client_ip,
             INGEST_TIMEOUT_SEC,
         )
         raise HTTPException(
@@ -170,17 +185,36 @@ async def ingest_scada(
         )
     except Exception:
         logger.exception(
-            "[INGEST DB ERROR] lagoon_id=%s",
+            "[INGEST ERROR] lagoon=%s ip=%s",
             lagoon_id,
+            client_ip,
         )
         raise
 
     if alarm_transition_count:
         logger.info(
-            "[INGEST ALARMAS] lagoon_id=%s transiciones=%s",
+            "[INGEST ALARMS] lagoon=%s count=%s",
             lagoon_id,
             alarm_transition_count,
         )
+
+    ingest_log = logger.info
+    if (
+        minute_row_count == 0
+        and scada_event_count == 0
+        and alarm_transition_count == 0
+    ):
+        ingest_log = logger.debug
+
+    ingest_log(
+        "[INGEST OK] lagoon=%s ip=%s rows=%s events=%s alarms=%s at=%s",
+        lagoon_id,
+        client_ip,
+        minute_row_count,
+        scada_event_count,
+        alarm_transition_count,
+        ts_iso,
+    )
 
     # ===== REALTIME =====
     await state.update(

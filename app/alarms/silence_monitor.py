@@ -5,7 +5,10 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from app.alarms.notifier import dispatch_notifications
-from app.alarms.service import evaluate_lagoon_signal_alarms
+from app.alarms.service import (
+    evaluate_lagoon_signal_alarms,
+    log_persisted_alarm_transitions,
+)
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.db.session import SessionLocal
@@ -75,6 +78,7 @@ class AlarmLagoonSignalMonitor:
                 now_utc=now_utc,
             )
             db.commit()
+            log_persisted_alarm_transitions(transitions)
         except Exception:
             db.rollback()
             raise

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from uuid import uuid4
 from datetime import datetime, timedelta, timezone
 from typing import Iterable
 
@@ -12,6 +13,8 @@ from app.core.config import settings
 SECRET_KEY = settings.JWT_SECRET_KEY
 ALGORITHM = settings.JWT_ALGORITHM
 ACCESS_TOKEN_EXPIRE_MINUTES = settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES
+ISSUER = settings.JWT_ISSUER
+AUDIENCE = settings.JWT_AUDIENCE
 
 security = HTTPBearer(auto_error=False)
 
@@ -50,10 +53,21 @@ def get_token_roles(payload: dict) -> list[str]:
 
 def create_token(data: dict, expires_delta: timedelta | None = None) -> str:
     to_encode = data.copy()
-    expire = datetime.now(timezone.utc) + (
+    issued_at = datetime.now(timezone.utc)
+    expire = issued_at + (
         expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     )
-    to_encode.update({"exp": expire})
+    to_encode.update(
+        {
+            "iss": ISSUER,
+            "iat": issued_at,
+            "nbf": issued_at,
+            "exp": expire,
+            "jti": str(uuid4()),
+        }
+    )
+    if AUDIENCE:
+        to_encode["aud"] = AUDIENCE
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 
@@ -63,7 +77,22 @@ def create_access_token(data: dict, expires_delta: timedelta | None = None) -> s
 
 def decode_access_token(token: str) -> dict:
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        decode_kwargs: dict[str, object] = {
+            "algorithms": [ALGORITHM],
+            "issuer": ISSUER,
+            "options": {
+                "require_sub": True,
+                "require_exp": True,
+                "require_iat": True,
+                "require_nbf": True,
+                "require_iss": True,
+                "verify_aud": bool(AUDIENCE),
+            },
+        }
+        if AUDIENCE:
+            decode_kwargs["audience"] = AUDIENCE
+
+        payload = jwt.decode(token, SECRET_KEY, **decode_kwargs)
         if "sub" not in payload:
             raise HTTPException(status_code=401, detail="Invalid token payload")
 

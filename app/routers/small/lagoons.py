@@ -238,6 +238,7 @@ def small_last_minute(
 @router.get("/lagoons/{lagoon_id}/current", response_model=ScadaCurrent)
 def small_current(
     lagoon_id: str,
+    request: Request,
     db: Session = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
@@ -253,7 +254,11 @@ def small_current(
         permission=PERMISSION_VIEW,
         expected_product_type=ProductType.SMALL,
     )
-    data = get_current(lagoon_id, db)
+    data = get_current(
+        lagoon_id,
+        db,
+        state_store=getattr(request.app.state, "state_store", None),
+    )
     if not data:
         logger.warning(
             "[API] endpoint_response_summary endpoint=/api/small/lagoons/%s/current user_id=%s result=no_data",

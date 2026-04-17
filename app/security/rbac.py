@@ -24,6 +24,7 @@ from app.auth.services.lagoon_service import (
 from app.db.session import SessionLocal, get_db
 from app.models.role import ProductType
 from app.core.logging import get_logger
+from app.core.config import settings
 
 logger = get_logger("security.rbac")
 
@@ -45,6 +46,8 @@ ALL_READ_ROLES = [
     ROLE_VISUAL_SMALL,
     ROLE_SUPERADMIN,
 ]
+
+WS_PROTOCOL_AUTH_PREFIXES = ("bearer.", "token.")
 
 
 def _extract_user_id(user_payload: dict) -> str:
@@ -163,15 +166,80 @@ def require_permission(
     return checker
 
 
-def _extract_ws_token(websocket: WebSocket, token: str | None) -> str:
-    if token:
-        if token.lower().startswith("bearer "):
-            return token.split(" ", 1)[1].strip()
-        return token.strip()
+def _extract_bearer_token(value: str | None) -> str | None:
+    if not value:
+        return None
 
-    authorization = websocket.headers.get("authorization")
-    if authorization and authorization.lower().startswith("bearer "):
-        return authorization.split(" ", 1)[1].strip()
+    candidate = value.strip()
+    if not candidate:
+        return None
+
+    if candidate.lower().startswith("bearer "):
+        candidate = candidate.split(" ", 1)[1].strip()
+
+    return candidate or None
+
+
+def _extract_subprotocol_token(header_value: str | None) -> str | None:
+    if not header_value:
+        return None
+
+    tokens = [
+        token.strip()
+        for token in header_value.split(",")
+        if token and token.strip()
+    ]
+    for token in tokens:
+        lowered = token.lower()
+        for prefix in WS_PROTOCOL_AUTH_PREFIXES:
+            if lowered.startswith(prefix):
+                return token[len(prefix):].strip()
+    return None
+
+
+def describe_websocket_token_source(
+    websocket: WebSocket,
+    token: str | None = None,
+) -> str:
+    if _extract_bearer_token(token):
+        return "parameter"
+
+    if _extract_bearer_token(websocket.headers.get("authorization")):
+        return "header"
+
+    if _extract_subprotocol_token(
+        websocket.headers.get("sec-websocket-protocol")
+    ):
+        return "subprotocol"
+
+    if settings.WS_ALLOW_QUERY_TOKEN and _extract_bearer_token(
+        websocket.query_params.get("token")
+    ):
+        return "query"
+
+    return "none"
+
+
+def extract_websocket_token(
+    websocket: WebSocket,
+    token: str | None = None,
+) -> str:
+    for candidate in (
+        _extract_bearer_token(token),
+        _extract_bearer_token(websocket.headers.get("authorization")),
+        _extract_subprotocol_token(
+            websocket.headers.get("sec-websocket-protocol")
+        ),
+    ):
+        if candidate:
+            return candidate
+
+    if settings.WS_ALLOW_QUERY_TOKEN:
+        query_token = _extract_bearer_token(
+            websocket.query_params.get("token")
+        )
+        if query_token:
+            return query_token
 
     raise WebSocketException(
         code=status.WS_1008_POLICY_VIOLATION,
@@ -184,7 +252,7 @@ def ensure_websocket_roles(
     roles: list[str],
     token: str | None = None,
 ) -> dict:
-    raw_token = _extract_ws_token(websocket, token=token)
+    raw_token = extract_websocket_token(websocket, token=token)
 
     try:
         user = decode_access_token(raw_token)
@@ -216,7 +284,7 @@ def ensure_websocket_permission(
     if permission not in VALID_PERMISSIONS:
         raise ValueError(f"Unsupported permission: {permission}")
 
-    raw_token = _extract_ws_token(websocket, token=token)
+    raw_token = extract_websocket_token(websocket, token=token)
 
     try:
         user = decode_access_token(raw_token)

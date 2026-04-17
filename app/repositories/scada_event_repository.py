@@ -47,10 +47,53 @@ class ScadaEventRepository:
                 start_local
             FROM vw_scada_last_3_pump_actions
             WHERE lagoon_id = :lagoon_id
-            ORDER BY start_local
+            ORDER BY start_local DESC
         """)
 
         rows = db.execute(sql, {"lagoon_id": lagoon_id}).mappings().all()
+
+        events: list[dict] = []
+        for row in rows:
+            start_local = (
+                row["start_local"].isoformat()
+                if hasattr(row["start_local"], "isoformat")
+                else str(row["start_local"])
+            )
+            events.append(
+                {
+                    "lagoon_id": row["lagoon_id"],
+                    "tag_id": row["tag_id"],
+                    "tag_label": row["tag_label"],
+                    "start_local": start_local,
+                }
+            )
+
+        return events
+
+    @staticmethod
+    def get_recent_events_by_lagoon(
+        db: Session,
+        lagoon_id: str,
+        limit: int = 100,
+    ) -> list[dict]:
+        safe_limit = max(1, min(int(limit), 500))
+        sql = text("""
+            SELECT
+                lagoon_id,
+                tag_id,
+                tag_label,
+                start_ts AS start_local
+            FROM scada_event
+            WHERE lagoon_id = :lagoon_id
+              AND start_ts IS NOT NULL
+            ORDER BY start_ts DESC
+            LIMIT :limit
+        """)
+
+        rows = db.execute(
+            sql,
+            {"lagoon_id": lagoon_id, "limit": safe_limit},
+        ).mappings().all()
 
         events: list[dict] = []
         for row in rows:

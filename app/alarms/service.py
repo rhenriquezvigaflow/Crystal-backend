@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from fnmatch import fnmatch
 from typing import Any, Mapping
 
+from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from app.alarms.models import (
@@ -14,11 +15,12 @@ from app.alarms.models import (
     AlarmDefinition,
     AlarmEvent,
 )
-from app.alarms.notifier import NotificationJob
 from app.alarms.repository import AlarmRepository, deduplicate_rules
 from app.core.logging import get_logger
+from app.schemas.notifications import AlarmNotificationPayload, NotificationJob
 
 logger = get_logger("alarms.service")
+_comm_loss_last_seen: dict[object, datetime] = {}
 
 
 @dataclass(slots=True)
@@ -28,6 +30,7 @@ class AlarmTransition:
     transition: str
     event_id: str
     alarm_definition_id: str
+    alarm_code: str
     lagoon_id: str
     tag_id: str | None
     alarm_type: str
@@ -35,6 +38,7 @@ class AlarmTransition:
     happened_at: datetime
     value: Any
     reason: str
+    duration_sec: int | None = None
 
 
 @dataclass(slots=True)
@@ -51,6 +55,56 @@ class EvaluationDecision:
     should_alarm: bool | None
     value: Any
     reason: str
+
+
+def log_persisted_alarm_transitions(
+    transitions: list[AlarmTransition],
+) -> None:
+    for transition in transitions:
+        if transition.transition == "OPEN":
+            logger.warning(
+                "[ALARM OPEN] lagoon=%s code=%s tag=%s type=%s severity=%s event=%s reason=%s",
+                transition.lagoon_id,
+                transition.alarm_code,
+                transition.tag_id,
+                transition.alarm_type,
+                transition.severity,
+                transition.event_id,
+                transition.reason,
+            )
+            continue
+
+        logger.info(
+            "[ALARM CLOSE] lagoon=%s code=%s tag=%s type=%s severity=%s event=%s duration_sec=%s reason=%s",
+            transition.lagoon_id,
+            transition.alarm_code,
+            transition.tag_id,
+            transition.alarm_type,
+            transition.severity,
+            transition.event_id,
+            transition.duration_sec,
+            transition.reason,
+        )
+
+
+def _get_comm_loss_last_seen(definition: AlarmDefinition) -> datetime | None:
+    cached = _comm_loss_last_seen.get(definition.id)
+    if cached is not None:
+        return _ensure_utc(cached)
+
+    if definition.last_seen_ts is None:
+        return None
+
+    normalized = _ensure_utc(definition.last_seen_ts)
+    _comm_loss_last_seen[definition.id] = normalized
+    return normalized
+
+
+def _set_comm_loss_last_seen(
+    definition: AlarmDefinition,
+    ts: datetime,
+) -> None:
+    _comm_loss_last_seen[definition.id] = _ensure_utc(ts)
 
 
 def evaluate_alarms(
@@ -253,21 +307,11 @@ def open_alarm(
         open_reason=reason,
     )
 
-    logger.warning(
-        "[ALARMA ABIERTA] definition_id=%s lagoon_id=%s tag_id=%s tipo=%s severidad=%s event_id=%s motivo=%s",
-        definition.id,
-        definition.lagoon_id,
-        definition.tag_id,
-        definition.alarm_type,
-        definition.severity,
-        event.id,
-        reason,
-    )
-
     return AlarmTransition(
         transition="OPEN",
         event_id=str(event.id),
         alarm_definition_id=str(definition.id),
+        alarm_code=definition.code,
         lagoon_id=definition.lagoon_id,
         tag_id=definition.tag_id,
         alarm_type=definition.alarm_type,
@@ -303,22 +347,11 @@ def close_alarm(
         close_reason=reason,
     )
 
-    logger.info(
-        "[ALARMA CERRADA] definition_id=%s lagoon_id=%s tag_id=%s tipo=%s severidad=%s event_id=%s duration_sec=%s motivo=%s",
-        definition.id,
-        definition.lagoon_id,
-        definition.tag_id,
-        definition.alarm_type,
-        definition.severity,
-        event.id,
-        event.duration_sec,
-        reason,
-    )
-
     return AlarmTransition(
         transition="CLOSE",
         event_id=str(event.id),
         alarm_definition_id=str(definition.id),
+        alarm_code=definition.code,
         lagoon_id=definition.lagoon_id,
         tag_id=definition.tag_id,
         alarm_type=definition.alarm_type,
@@ -326,6 +359,7 @@ def close_alarm(
         happened_at=source_ts,
         value=value,
         reason=reason,
+        duration_sec=event.duration_sec,
     )
 
 
@@ -339,12 +373,52 @@ def _route_notifications(
         definition=definition,
         transition=transition.transition,
     )
-    rules = deduplicate_rules(rules)
+    lagoon_name: str | None = None
+
+    if not rules:
+        logger.info(
+            "[NOTIFY SKIP] reason=no_routing_rules definition=%s lagoon=%s tag=%s type=%s severity=%s event=%s",
+            definition.id,
+            transition.lagoon_id,
+            transition.tag_id,
+            transition.alarm_type,
+            transition.severity,
+            transition.event_id,
+        )
+        return []
+
+    matching_rules = [
+        rule
+        for rule in rules
+        if _tag_matches(rule.tag_pattern, definition.tag_id)
+    ]
+    matching_rules = deduplicate_rules(matching_rules)
 
     jobs: list[NotificationJob] = []
-    for rule in rules:
-        if not _tag_matches(rule.tag_pattern, definition.tag_id):
-            continue
+    for rule in matching_rules:
+        alarm_payload: AlarmNotificationPayload | None = None
+        if rule.channel == "email":
+            if lagoon_name is None:
+                lagoon_name = AlarmRepository.get_lagoon_name(
+                    db=db,
+                    lagoon_id=definition.lagoon_id,
+                )
+            try:
+                alarm_payload = _build_alarm_notification_payload(
+                    definition=definition,
+                    transition=transition,
+                    lagoon_name=lagoon_name,
+                    target=rule.target,
+                )
+            except ValidationError:
+                logger.warning(
+                    "[NOTIFY RULE SKIP] channel=%s target=%s lagoon=%s definition=%s reason=invalid_email_target",
+                    rule.channel,
+                    rule.target,
+                    definition.lagoon_id,
+                    definition.id,
+                )
+                continue
 
         jobs.append(
             NotificationJob(
@@ -361,10 +435,56 @@ def _route_notifications(
                     definition=definition,
                     transition=transition,
                 ),
+                alarm_payload=alarm_payload,
             )
         )
 
+    if not jobs:
+        logger.info(
+            "[NOTIFY SKIP] reason=no_matching_targets definition=%s lagoon=%s tag=%s type=%s severity=%s event=%s candidate_rules=%s matched_rules=%s",
+            definition.id,
+            transition.lagoon_id,
+            transition.tag_id,
+            transition.alarm_type,
+            transition.severity,
+            transition.event_id,
+            len(rules),
+            len(matching_rules),
+        )
+
     return jobs
+
+
+def _build_alarm_notification_payload(
+    definition: AlarmDefinition,
+    transition: AlarmTransition,
+    lagoon_name: str | None,
+    target: str,
+) -> AlarmNotificationPayload:
+    threshold = _format_threshold(definition.condition)
+    return AlarmNotificationPayload(
+        lagoon_id=transition.lagoon_id,
+        plant_name=lagoon_name,
+        alarm_id=str(definition.id),
+        alarm_code=definition.code,
+        event_id=transition.event_id,
+        timestamp=transition.happened_at,
+        priority=transition.severity,
+        category=transition.alarm_type,
+        title=_build_email_title(definition=definition, transition=transition),
+        description=_build_email_description(
+            definition=definition,
+            transition=transition,
+            threshold=threshold,
+        ),
+        value_actual=_safe_str(transition.value),
+        threshold=threshold,
+        recipients=target,
+        level=_notification_level(transition.severity),
+        tag_id=transition.tag_id,
+        transition=transition.transition,
+        reason=transition.reason,
+    )
 
 
 def _evaluate_definition(
@@ -596,8 +716,7 @@ def _evaluate_comm_loss(
     if not tag_id:
         # A nivel laguna, comm-loss no puede disparar desde esta ruta,
         # porque este evaluador corre solo cuando entra ingest.
-        definition.last_seen_ts = source_ts
-        db.add(definition)
+        _set_comm_loss_last_seen(definition, source_ts)
         return EvaluationDecision(
             should_alarm=False,
             value=None,
@@ -606,24 +725,23 @@ def _evaluate_comm_loss(
 
     tag_in_payload = tag_id in tags and tags.get(tag_id) is not None
     if tag_in_payload:
-        definition.last_seen_ts = source_ts
-        db.add(definition)
+        _set_comm_loss_last_seen(definition, source_ts)
         return EvaluationDecision(
             should_alarm=False,
             value=tags[tag_id],
             reason="comunicacion_restaurada",
         )
 
-    if definition.last_seen_ts is None:
-        definition.last_seen_ts = source_ts
-        db.add(definition)
+    last_seen_ts = _get_comm_loss_last_seen(definition)
+    if last_seen_ts is None:
+        _set_comm_loss_last_seen(definition, source_ts)
         return EvaluationDecision(
             should_alarm=False,
             value=None,
             reason="baseline_comunicacion_inicializada",
         )
 
-    age_sec = (source_ts - definition.last_seen_ts).total_seconds()
+    age_sec = (source_ts - last_seen_ts).total_seconds()
     violated = age_sec > timeout_sec
 
     return EvaluationDecision(
@@ -643,16 +761,16 @@ def _evaluate_lagoon_comm_loss_by_clock(
     timeout_sec = _to_float(condition.get("timeout_sec"))
     timeout_sec = timeout_sec if timeout_sec is not None else 600.0
 
-    if definition.last_seen_ts is None:
-        definition.last_seen_ts = now_utc
-        db.add(definition)
+    last_seen_ts = _get_comm_loss_last_seen(definition)
+    if last_seen_ts is None:
+        _set_comm_loss_last_seen(definition, now_utc)
         return EvaluationDecision(
             should_alarm=False,
             value=None,
             reason="baseline_laguna_inicializada",
         )
 
-    age_sec = (now_utc - _ensure_utc(definition.last_seen_ts)).total_seconds()
+    age_sec = (now_utc - last_seen_ts).total_seconds()
     age_sec = max(age_sec, 0.0)
     violated = age_sec > timeout_sec
 
@@ -730,6 +848,108 @@ def _render_notification_message(
         f"valor={transition.value} "
         f"motivo={transition.reason}"
     )
+
+
+def _build_email_title(
+    definition: AlarmDefinition,
+    transition: AlarmTransition,
+) -> str:
+    target = transition.tag_id or transition.lagoon_id
+
+    if transition.alarm_type == ALARM_TYPE_THRESHOLD:
+        return f"Threshold alarm for {target}"
+
+    if transition.alarm_type == ALARM_TYPE_STATE:
+        return f"State alarm for {target}"
+
+    if transition.alarm_type == ALARM_TYPE_COMM_LOSS:
+        if transition.tag_id:
+            return f"Communication loss alarm for {transition.tag_id}"
+        return f"Communication loss alarm for lagoon {transition.lagoon_id}"
+
+    return f"Alarm for {target}"
+
+
+def _build_email_description(
+    definition: AlarmDefinition,
+    transition: AlarmTransition,
+    threshold: str | None,
+) -> str:
+    target = transition.tag_id or transition.lagoon_id
+    current_value = _safe_str(transition.value) or "n/a"
+
+    if transition.alarm_type == ALARM_TYPE_THRESHOLD:
+        if threshold:
+            return (
+                f"A threshold condition was triggered for {target}. "
+                f"Current value: {current_value}. Rule: {threshold}."
+            )
+        return (
+            f"A threshold condition was triggered for {target}. "
+            f"Current value: {current_value}."
+        )
+
+    if transition.alarm_type == ALARM_TYPE_STATE:
+        return (
+            f"A state-based alarm was triggered for {target}. "
+            f"Current value: {current_value}."
+        )
+
+    if transition.alarm_type == ALARM_TYPE_COMM_LOSS:
+        if transition.tag_id:
+            return f"A communication loss alarm was triggered for {transition.tag_id}."
+        return (
+            f"A communication loss alarm was triggered for lagoon "
+            f"{transition.lagoon_id}."
+        )
+
+    return f"An alarm was triggered for {target}."
+
+
+def _notification_level(severity: str) -> str:
+    normalized = severity.strip().lower()
+    if normalized in {"critical", "high"}:
+        return "lvl2"
+    return "lvl1"
+
+
+def _format_threshold(condition: Any) -> str | None:
+    if not isinstance(condition, dict):
+        return None
+
+    op = str(condition.get("op", "")).strip()
+    op_value = condition.get("value")
+    if op and op_value is not None:
+        return f"{op} {op_value}"
+
+    low = condition.get("low")
+    high = condition.get("high")
+    if low is not None or high is not None:
+        parts: list[str] = []
+        if low is not None:
+            parts.append(f"min={low}")
+        if high is not None:
+            parts.append(f"max={high}")
+        return " | ".join(parts)
+
+    timeout_sec = condition.get("timeout_sec")
+    if timeout_sec is not None:
+        return f"timeout_sec={timeout_sec}"
+
+    to_state = condition.get("to_state")
+    from_states = condition.get("from_states")
+    if to_state is not None and from_states is not None:
+        return f"from_states={from_states} -> to_state={to_state}"
+
+    equals = condition.get("equals")
+    if equals is not None:
+        return f"equals {equals}"
+
+    states = condition.get("states")
+    if states is not None:
+        return f"states={states}"
+
+    return None
 
 
 def _to_float(value: Any) -> float | None:

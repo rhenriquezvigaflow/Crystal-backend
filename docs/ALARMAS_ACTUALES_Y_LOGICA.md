@@ -1,175 +1,222 @@
-# Alarmas SCADA: estado actual, reglas y logica
+# Alarmas SCADA: estado actual y logica
 
-## 1) Estado actual (backend + BD)
+Documento alineado al codigo actual del backend. Este archivo describe la logica soportada por el motor; no fija inventarios numericos de BD para evitar que la documentacion quede obsoleta.
 
-Fecha de corte: `2026-04-06` (consulta directa a BD en este entorno).
+## Flujo real del motor
 
-Alarmas habilitadas en `alarm_definition`:
+### Durante ingest
 
-- Total: `65`
-- `state`: `33` (todas `critical`)
-- `comm_loss`: `32` (`14 critical` y `18 warning`)
-- `threshold`: `0` (soporte implementado, pero sin definiciones activas hoy)
+1. `POST /ingest/scada` entra por `app/routers/ingest.py`.
+2. `ingest()` persiste `scada_minute` y detecta `scada_event`.
+3. `evaluate_alarms()` evalua las definiciones relevantes para la laguna.
+4. Si corresponde, abre o cierra `alarm_event`.
+5. Se hace `commit`.
+6. Recien despues del commit se llama `dispatch_notifications()`.
 
-Distribucion relevante:
+### Por reloj de servidor
 
-- `state` bombas: `18`
-- `state` valvulas: `15`
-- `comm_loss` laguna (sin tag): `14` (una por laguna)
-- `comm_loss` bombas: `18`
+1. `AlarmLagoonSignalMonitor` corre en background.
+2. `evaluate_lagoon_signal_alarms()` revisa definiciones `comm_loss` a nivel laguna.
+3. Si hay transiciones, persiste `alarm_event`.
+4. Hace `commit`.
+5. Despacha notificaciones post-commit.
 
-## 2) Tablas usadas por el sistema de alarmas
+## Tipos de alarma soportados
 
-- `alarm_definition`: catalogo de definiciones (tipo, severidad, condicion JSON, etc.).
-  - Nota PT/FIT: `deadband` se mantiene en BD pero para umbrales se fija internamente en `0.0`.
-- `alarm_event`: ciclo de vida OPEN/CLOSED de cada alarma.
-- `alarm_notification_rule`: reglas de enrutamiento de notificaciones.
+## 1) `state`
 
-Tablas SCADA que alimentan la logica:
+El motor soporta varias formas de condicion:
 
-- `scada_event`: usado para transiciones de estado (`previous_state -> state`).
-- `scada_minute`: usado para descubrir tags PT/FIT en la vista consolidada de umbrales.
-
-## 3) Tipos de alarma y reglas vigentes hoy
-
-## 3.1) Alarmas de estado (`alarm_type = state`)
-
-Regla vigente para bombas y valvulas:
-
-- Condicion por transicion:
-  - `condition = {"from_states":[1,2], "to_state":3}`
-- Se abre cuando la ultima transicion del tag es `1->3` o `2->3`.
-
-Mapa de estados SCADA usado:
-
-- `0 = Detenida`
-- `1 = Funcionando`
-- `2 = Moviendose`
-- `3 = Falla`
-
-Notas:
-
-- Esta regla reemplaza la logica anterior de "estado == 3" fijo.
-- La evaluacion se apoya en `scada_event` para leer `previous_state` y `state`.
-
-## 3.2) Alarmas de perdida de comunicacion (`alarm_type = comm_loss`)
-
-Reglas vigentes:
-
-- Bomba por tag (`warning`):
-  - `condition = {"timeout_sec": 180}`
-  - Si la edad desde `last_seen_ts` supera 180s, abre alarma.
-- Laguna completa (`critical`, `tag_id = NULL`):
-  - `condition = {"timeout_sec": 600}`
-  - Si no entra senal a la laguna por mas de 10 min, abre alarma.
+- transicion:
+  - `{"from_states":[1,2], "to_state":3}`
+- igualdad:
+  - `{"equals":3}`
+- inclusion:
+  - `{"states":[2,3]}`
+- exclusion:
+  - `{"not_in":[0,1]}`
 
 Implementacion:
 
-- En `/ingest/scada`, cada payload actualiza observacion (`last_seen_ts`) para la laguna.
-- En segundo plano, `AlarmLagoonSignalMonitor` evalua por reloj (intervalo configurable, default 30s).
+- las transiciones usan `scada_event` como fuente de verdad para obtener `previous_state` y `state`
+- las demas variantes evaluan el valor actual del tag en el payload
 
-## 3.3) Alarmas de umbral (`alarm_type = threshold`)
+Comportamiento:
 
-Estado actual:
+- si la condicion queda activa y no existe evento abierto, se crea `OPEN`
+- si deja de cumplirse y existe un evento abierto, se crea `CLOSE`
 
-- Motor implementado.
-- API implementada para PT/FIT sobre contrato consolidado.
-- Definiciones activas hoy en BD: `0`.
+## 2) `comm_loss`
 
-Contrato API vigente:
+### Por tag
 
-- Lectura:
-  - `GET /alarms/{lagoon_id}/thresholds/pt-fit/view`
-  - respuesta por tag con: `tag_id`, `tag_name`, `source`, `min_value`, `max_value`, `severity`, `enabled`
-- Escritura:
-  - `PUT /alarms/{lagoon_id}/thresholds/pt-fit`
-  - payload por item: `tag_id`, `min_value`, `max_value`, `severity`, `enabled`
+- se evalua dentro de `evaluate_alarms()`
+- si el tag viene presente y con valor, se considera comunicacion restaurada
+- si el tag deja de llegar, se compara la edad contra `timeout_sec`
 
-Semantica de `source`:
+Condicion soportada:
 
-- `configured`: existe al menos una definicion threshold para el tag.
-- `candidate`: tag descubierto en telemetria sin configuracion de umbral.
+- `{"timeout_sec": 180}`
 
-Formato de condicion soportado:
+### Por laguna completa
 
-- Operador simple:
-  - `{"op": ">", "value": 12.3}` (tambien `>=`, `<`, `<=`, `==`, `!=`)
-- Rango:
+- se evalua solo en el monitor de fondo
+- aplica a definiciones con `tag_id = NULL`
+- usa el reloj del servidor y `last_seen_ts`
+
+Condicion soportada:
+
+- `{"timeout_sec": 600}`
+
+## 3) `threshold`
+
+Soporta dos formatos:
+
+- operador:
+  - `{"op": ">", "value": 12.3}`
+  - operadores validos: `>`, `>=`, `<`, `<=`, `==`, `!=`
+- rango:
   - `{"low": 2.0, "high": 8.0}`
 
 Deadband:
 
-- No es configurable desde API PT/FIT.
-- Para umbrales PT/FIT se normaliza internamente a `0.0`.
+- si la condicion trae `deadband`, se usa ese valor
+- si no, cae a `definition.deadband`
+- cuando la alarma ya esta abierta, el deadband se aplica como histeresis para evitar flapping
 
-## 4) Reglas de notificacion activas hoy (`alarm_notification_rule`)
+Casos no evaluables:
 
-Hay `4` reglas globales habilitadas:
+- tag ausente
+- valor no numerico
+- threshold sin limites validos
 
-1. `state + critical + tag_pattern='P%_ST%_SCADA'` -> `email` a `scada-alertas@tu-dominio.com`
-2. `state + critical + tag_pattern='VE%_ST'` -> `email` a `scada-alertas@tu-dominio.com`
-3. `comm_loss + warning + tag_pattern='P%_ST%_SCADA'` -> `email` a `scada-alertas@tu-dominio.com`
-4. `comm_loss + critical + tag_pattern NULL` -> `email` a `scada-alertas@tu-dominio.com`
+## Seleccion de definiciones
+
+`AlarmRepository.get_definitions()` trae:
+
+- definiciones habilitadas de la laguna
+- `state` y `threshold` solo si su `tag_id` viene en el payload
+- `comm_loss` siempre, incluso si el payload llega vacio
+
+## Ciclo de vida e idempotencia
+
+El motor evita duplicados con varias capas:
+
+- lock pesimista `FOR UPDATE` sobre la definicion
+- re-chequeo del evento `OPEN` antes de crear uno nuevo
+- cierre solo si existe un evento `OPEN`
+
+Resultado:
+
+- una definicion no deberia abrir mas de un evento simultaneo
+- los cierres son idempotentes si el evento ya fue cerrado
+
+## Reglas de notificacion
+
+Las reglas salen de `alarm_notification_rule`.
+
+Precedencia:
+
+1. regla atada a `alarm_definition_id`
+2. regla por `lagoon_id`
+3. regla global
+
+Filtros adicionales:
+
+- `alarm_type`
+- `severity`
+- `tag_pattern`
+
+Compatibilidad de `tag_pattern`:
+
+- el backend acepta patrones historicos estilo SQL LIKE con `%`
+- internamente se convierten a `fnmatch` (`%` -> `*`)
+
+Deduplicacion:
+
+- despues del match, se eliminan duplicados por `(channel, target)`
 
 Importante:
 
-- El canal `email` actual es mock (se registra en log, no envia SMTP real).
-- Hay deduplicacion por `(channel, target)` para evitar duplicados de destino.
+- solo las transiciones `OPEN` generan jobs automaticos de notificacion
+- las transiciones `CLOSE` se persisten y se loggean, pero no disparan notificaciones
 
-## 5) Logica operacional (motor de alarmas)
+## Canales soportados
 
-Flujo por ingest:
+- `email`: envio real via SMTP
+- `webhook`: simulado por log, sin POST HTTP real
 
-1. `ingest()` persiste datos SCADA.
-2. `evaluate_alarms()` evalua definiciones relevantes de la laguna.
-3. Si corresponde, abre/cierra en `alarm_event`.
-4. Se hace `commit`.
-5. `dispatch_notifications()` procesa jobs (mock por log).
+Detalle del flujo email en:
 
-Flujo por reloj (sin senal de laguna):
+- `EMAIL_NOTIFICATIONS.md`
 
-1. `AlarmLagoonSignalMonitor` corre cada N segundos.
-2. Ejecuta `evaluate_lagoon_signal_alarms()`.
-3. Abre/cierra `comm_loss` de laguna (`tag_id = NULL`) segun timeout.
-4. Registra transiciones y notificaciones.
+## Titulos y payloads de email automatico
 
-## 6) Ciclo de vida OPEN/CLOSED e idempotencia
+Cuando la notificacion nace desde una alarma del motor:
 
-Para abrir/cerrar:
+- `critical` o `high` -> `LVL2`
+- resto -> `LVL1`
 
-- Lock pesimista por definicion (`FOR UPDATE`).
-- Re-chequeo de evento activo antes de abrir.
-- Indice unico parcial evita mas de un OPEN por definicion:
-  - `uq_alarm_event_open_per_definition` (`status='OPEN'`).
+Titulos:
 
-## 7) Logging de alarmas
+- `threshold`: `Threshold alarm for <tag>`
+- `state`: `State alarm for <tag>`
+- `comm_loss` por tag: `Communication loss alarm for <tag>`
+- `comm_loss` por laguna: `Communication loss alarm for lagoon <lagoon_id>`
 
-Loggers de alarmas:
+## Logging relevante
+
+Loggers:
 
 - `alarms.service`
-- `alarms.notifier`
 - `alarms.silence_monitor`
+- `alarms.thresholds.service`
+- `alarms.notification.orchestrator`
+- `alarms.email.service`
 
-Persistencia en archivo:
+Mensajes utiles:
 
-- Todo logger que empieza por `alarms.` tambien se escribe en:
-  - `logs/alarmas.txt`
-- Rotacion configurable por variables de entorno:
-  - `ALARM_LOG_TO_FILE`
-  - `ALARM_LOG_FILE_PATH`
-  - `ALARM_LOG_MAX_BYTES`
-  - `ALARM_LOG_BACKUP_COUNT`
+- `[ALARM OPEN]`
+- `[ALARM CLOSE]`
+- `[NOTIFY SKIP]`
+- `[NOTIFY RULE SKIP]`
+- `[EMAIL SENT]`
+- `[WEBHOOK SIMULATED]`
 
-## 8) Alcance y limites actuales
+## Consultas utiles para validar estado real de BD
 
-Cubre actualmente:
+Definiciones habilitadas por tipo:
 
-- Falla por transicion a estado `3` en bombas/valvulas.
-- Perdida de comunicacion por tag de bomba.
-- Laguna sin senal por reloj (10 min).
-- Umbrales PT/FIT (infra y API listas para crear definiciones).
+```sql
+SELECT alarm_type, severity, count(*)
+FROM alarm_definition
+WHERE enabled = true
+GROUP BY alarm_type, severity
+ORDER BY alarm_type, severity;
+```
 
-No aplicado hoy:
+Eventos abiertos:
 
-- No hay definiciones `threshold` cargadas actualmente en BD.
-- Las notificaciones se emiten una sola vez por evento de alarma (solo en `OPEN`).
+```sql
+SELECT lagoon_id, tag_id, alarm_type, severity, opened_at
+FROM alarm_event
+WHERE status = 'OPEN'
+ORDER BY opened_at DESC;
+```
+
+Reglas de notificacion activas:
+
+```sql
+SELECT channel, target, lagoon_id, alarm_definition_id, alarm_type, severity, tag_pattern
+FROM alarm_notification_rule
+WHERE enabled = true
+ORDER BY channel, target;
+```
+
+## Limites actuales
+
+- no hay cooldown entre notificaciones del mismo evento
+- no hay retries ni cola durable para email
+- no hay agrupacion de emails
+- `webhook` sigue siendo solo logging
+- los inventarios exactos de definiciones dependen de la BD y deben consultarse con SQL, no con texto estatico
