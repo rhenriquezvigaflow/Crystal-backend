@@ -8,6 +8,7 @@ from typing import Any
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.logging import get_logger
 from app.models.scada_event import ScadaEvent
 from app.models.scada_minute import ScadaMinute
@@ -113,9 +114,14 @@ def _to_running_state(value: Any) -> bool:
 
 def reset_runtime_state(
     reason: str = "manual",
-    lock_timeout_sec: float = 1.0,
+    lock_timeout_sec: float | None = None,
 ) -> bool:
-    acquired = _lock.acquire(timeout=lock_timeout_sec)
+    timeout_sec = (
+        settings.INGEST_RUNTIME_RESET_LOCK_TIMEOUT_SEC
+        if lock_timeout_sec is None
+        else lock_timeout_sec
+    )
+    acquired = _lock.acquire(timeout=timeout_sec)
     if not acquired:
         logger.warning(
             "[INGEST RESET SKIPPED] reason=%s lock=busy",

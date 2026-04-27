@@ -66,7 +66,7 @@ Condicion soportada:
 
 Condicion soportada:
 
-- `{"timeout_sec": 600}`
+- `{"timeout_sec": 3600}`
 
 ## 3) `threshold`
 

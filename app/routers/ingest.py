@@ -1,5 +1,4 @@
 import asyncio
-import os
 from fastapi import APIRouter, Request, HTTPException, Depends
 from pydantic import BaseModel
 from datetime import datetime, timezone
@@ -10,6 +9,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 
 from app.alarms.notifier import dispatch_notifications
 from app.alarms.service import evaluate_alarms, log_persisted_alarm_transitions
+from app.core.config import settings
 from app.core.logging import get_logger
 from app.db.session import SessionLocal
 from app.services.ingest_service import ingest, log_persisted_ingest
@@ -17,7 +17,7 @@ from app.security.api_key import verify_collector_key
 
 router = APIRouter()
 logger = get_logger("api.ingest")
-INGEST_TIMEOUT_SEC = float(os.getenv("INGEST_TIMEOUT_SEC", "125"))
+INGEST_TIMEOUT_SEC = settings.INGEST_REQUEST_TIMEOUT_SEC
 SYNC_COLLECTOR_TAGS_SQL = text(
     """
     SELECT CASE

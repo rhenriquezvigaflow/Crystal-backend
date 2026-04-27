@@ -9,7 +9,6 @@ from sqlalchemy.orm import Session
 from app.core.logging import get_logger
 from app.models.lagoon import Lagoon
 from app.models.role import ProductType
-from app.scada.layout_resolver import normalize_scada_layout
 
 ROLE_ADMIN_CRYSTAL = "AdminCrystal"
 ROLE_VISUAL_CRYSTAL = "VisualCrystal"
@@ -91,7 +90,6 @@ def _map_lagoon(lagoon: Lagoon) -> dict:
     return {
         "lagoon_id": lagoon.id,
         "lagoon_name": lagoon.name,
-        "scada_layout": normalize_scada_layout(lagoon.scada_layout),
         "timezone": lagoon.timezone,
         "ip": lagoon.ip,
         "enable": bool(lagoon.enable),

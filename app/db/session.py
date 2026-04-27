@@ -1,4 +1,3 @@
-import os
 from typing import Generator
 
 from sqlalchemy import create_engine
@@ -8,18 +7,10 @@ from app.core.config import settings
 
 DATABASE_URL = settings.DATABASE_URL
 
-DB_STATEMENT_TIMEOUT_MS = int(
-    os.getenv("DB_STATEMENT_TIMEOUT_MS", "120000")
-)
-DB_LOCK_TIMEOUT_MS = int(
-    os.getenv("DB_LOCK_TIMEOUT_MS", "5000")
-)
-DB_IDLE_TX_TIMEOUT_MS = int(
-    os.getenv("DB_IDLE_TX_TIMEOUT_MS", "120000")
-)
-DB_CONNECT_TIMEOUT_SEC = int(
-    os.getenv("DB_CONNECT_TIMEOUT_SEC", "10")
-)
+DB_STATEMENT_TIMEOUT_MS = settings.DB_STATEMENT_TIMEOUT_MS
+DB_LOCK_TIMEOUT_MS = settings.DB_LOCK_TIMEOUT_MS
+DB_IDLE_TX_TIMEOUT_MS = settings.DB_IDLE_TX_TIMEOUT_MS
+DB_CONNECT_TIMEOUT_SEC = settings.DB_CONNECT_TIMEOUT_SEC
 
 _PG_OPTIONS = (
     f"-c statement_timeout={DB_STATEMENT_TIMEOUT_MS} "
@@ -31,8 +22,8 @@ engine = create_engine(
     DATABASE_URL,
     future=True,
     pool_pre_ping=True,
-    pool_timeout=30,
-    pool_recycle=1800,
+    pool_timeout=settings.DB_POOL_TIMEOUT_SEC,
+    pool_recycle=settings.DB_POOL_RECYCLE_SEC,
     connect_args={
         "options": _PG_OPTIONS,
         "connect_timeout": DB_CONNECT_TIMEOUT_SEC,

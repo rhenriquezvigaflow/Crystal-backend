@@ -1,5 +1,4 @@
 import asyncio
-import os
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, WebSocketException, status
@@ -20,13 +19,11 @@ WS_SUBPROTOCOL = "crystal-scada.v1"
 
 
 def _get_heartbeat_seconds() -> float:
-    raw = os.getenv("WS_HEARTBEAT_SEC", "15")
-    try:
-        value = float(raw)
-    except ValueError:
-        value = 15.0
     # Keepalive obligatorio: minimo 1s.
-    return max(1.0, value)
+    return max(
+        float(settings.WS_MIN_HEARTBEAT_SEC),
+        float(settings.WS_HEARTBEAT_SEC),
+    )
 
 
 WS_HEARTBEAT_SEC = _get_heartbeat_seconds()

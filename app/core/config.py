@@ -70,6 +70,30 @@ class Settings(BaseSettings):
         description="Application runtime environment",
     )
     DATABASE_URL: str
+    DB_STATEMENT_TIMEOUT_MS: int = Field(
+        default=120000,
+        description="PostgreSQL statement timeout in milliseconds",
+    )
+    DB_LOCK_TIMEOUT_MS: int = Field(
+        default=5000,
+        description="PostgreSQL lock timeout in milliseconds",
+    )
+    DB_IDLE_TX_TIMEOUT_MS: int = Field(
+        default=120000,
+        description="PostgreSQL idle in transaction timeout in milliseconds",
+    )
+    DB_CONNECT_TIMEOUT_SEC: int = Field(
+        default=10,
+        description="Database connection timeout in seconds",
+    )
+    DB_POOL_TIMEOUT_SEC: int = Field(
+        default=30,
+        description="SQLAlchemy pool checkout timeout in seconds",
+    )
+    DB_POOL_RECYCLE_SEC: int = Field(
+        default=1800,
+        description="SQLAlchemy pool recycle interval in seconds",
+    )
     LOG_LEVEL: str = "INFO"
     PROXY_HEADERS_ENABLED: bool = Field(
         default=True,
@@ -91,6 +115,22 @@ class Settings(BaseSettings):
         default=False,
         description="Allow legacy WebSocket auth token in query string",
     )
+    WS_HEARTBEAT_SEC: float = Field(
+        default=15,
+        description="WebSocket keepalive ping interval in seconds",
+    )
+    WS_MIN_HEARTBEAT_SEC: float = Field(
+        default=1,
+        description="Minimum allowed WebSocket heartbeat interval in seconds",
+    )
+    WS_SEND_TIMEOUT_SEC: float = Field(
+        default=2,
+        description="WebSocket send timeout in seconds",
+    )
+    WS_MIN_SEND_TIMEOUT_SEC: float = Field(
+        default=0.1,
+        description="Minimum allowed WebSocket send timeout in seconds",
+    )
     COLLECTOR_API_KEY: str = Field(
         ...,
         description="API Key used by PLC collectors to ingest data"
@@ -104,7 +144,7 @@ class Settings(BaseSettings):
         description="JWT signing algorithm",
     )
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(
-        default=60,
+        default=1080,
         description="Access token expiration in minutes",
     )
     JWT_ISSUER: str = Field(
@@ -118,6 +158,18 @@ class Settings(BaseSettings):
     SECURITY_ENFORCE_STRONG_SECRETS: bool = Field(
         default=False,
         description="Fail startup when weak shared secrets are configured",
+    )
+    INGEST_REQUEST_TIMEOUT_SEC: float = Field(
+        default=125,
+        description="Ingest request timeout in seconds",
+    )
+    INGEST_RUNTIME_RESET_LOCK_TIMEOUT_SEC: float = Field(
+        default=1,
+        description="Timeout used to acquire the ingest runtime reset lock in seconds",
+    )
+    SCADA_RUNTIME_PLC_OFFLINE_TIMEOUT_SEC: int = Field(
+        default=10,
+        description="Seconds without realtime data before PLC status becomes offline",
     )
     SCADA_WATCHDOG_ENABLED: bool = Field(
         default=True,
@@ -139,9 +191,21 @@ class Settings(BaseSettings):
         default=90,
         description="Minimum seconds between recoveries",
     )
+    SCADA_WATCHDOG_IDLE_TX_MAX_AGE_SEC: float = Field(
+        default=60,
+        description="Minimum age in seconds before idle in transaction sessions are terminated",
+    )
     SCADA_WATCHDOG_HARD_RESTART: bool = Field(
         default=False,
         description="Terminate process on stall after recovery",
+    )
+    ALARM_TAG_COMM_LOSS_TIMEOUT_SEC: float = Field(
+        default=60,
+        description="Default comm loss timeout for tag-level alarms in seconds",
+    )
+    ALARM_LAGOON_COMM_LOSS_TIMEOUT_SEC: float = Field(
+        default=3600,
+        description="Default comm loss timeout for lagoon-level alarms in seconds",
     )
     ALARM_LAGOON_SIGNAL_MONITOR_ENABLED: bool = Field(
         default=True,

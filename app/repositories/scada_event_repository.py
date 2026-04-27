@@ -112,3 +112,39 @@ class ScadaEventRepository:
             )
 
         return events
+
+    @staticmethod
+    def get_event_report_by_lagoon_name(
+        db: Session,
+        lagoon_name: str,
+    ) -> tuple[list[str], list[dict]]:
+        sql = text("""
+            SELECT
+                nombre_laguna AS "Lagoon",
+                nombre_bomba AS "Pump",
+                name_tag AS "Tag Name",
+                estado_codigo AS "State Code",
+                CASE estado_codigo
+                    WHEN 0 THEN 'Stopped'
+                    WHEN 1 THEN 'Running'
+                    WHEN 3 THEN 'Fault'
+                    ELSE COALESCE(NULLIF(estado_nombre, ''), 'Unknown')
+                END AS "State",
+                hora_inicio_planta AS "Plant Start Time",
+                hora_termino_planta AS "Plant End Time",
+                tiempo_ejecucion AS "Runtime"
+            FROM public.vw_scada_event_report
+            WHERE estado_codigo NOT IN (2)
+              AND nombre_laguna = :lagoon_name
+              AND (
+                  tiempo_ejecucion IS NULL
+                  OR tiempo_ejecucion !~ '-'
+              )
+            ORDER BY nombre_laguna, nombre_bomba, hora_inicio_planta
+        """)
+
+        result = db.execute(sql, {"lagoon_name": lagoon_name})
+        columns = list(result.keys())
+        rows = [dict(row) for row in result.mappings().all()]
+
+        return columns, rows

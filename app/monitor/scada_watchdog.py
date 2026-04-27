@@ -45,6 +45,7 @@ class ScadaStallWatchdog:
         self.timeout_sec = settings.SCADA_WATCHDOG_TIMEOUT_SEC
         self.startup_grace_sec = settings.SCADA_WATCHDOG_STARTUP_GRACE_SEC
         self.recovery_cooldown_sec = settings.SCADA_WATCHDOG_RECOVERY_COOLDOWN_SEC
+        self.idle_tx_max_age_sec = settings.SCADA_WATCHDOG_IDLE_TX_MAX_AGE_SEC
         self.hard_restart = settings.SCADA_WATCHDOG_HARD_RESTART
 
         self._task: Optional[asyncio.Task] = None
@@ -61,10 +62,11 @@ class ScadaStallWatchdog:
         self._task = asyncio.create_task(self._run())
 
         logger.info(
-            "[WATCHDOG] started timeout_sec=%s interval_sec=%s startup_grace_sec=%s hard_restart=%s",
+            "[WATCHDOG] started timeout_sec=%s interval_sec=%s startup_grace_sec=%s idle_tx_max_age_sec=%s hard_restart=%s",
             self.timeout_sec,
             self.check_interval_sec,
             self.startup_grace_sec,
+            self.idle_tx_max_age_sec,
             self.hard_restart,
         )
 
@@ -201,7 +203,6 @@ class ScadaStallWatchdog:
         reset_ok = await asyncio.to_thread(
             reset_runtime_state,
             "watchdog_stall",
-            1.0,
         )
 
         # 2) Kill transacciones colgadas (idle in tx)
@@ -231,8 +232,8 @@ class ScadaStallWatchdog:
                 FROM pg_stat_activity
                 WHERE state = 'idle in transaction'
                   AND xact_start IS NOT NULL
-                  AND now() - xact_start > interval '60 seconds'
-            """))
+                  AND EXTRACT(EPOCH FROM now() - xact_start) > :idle_tx_max_age_sec
+            """), {"idle_tx_max_age_sec": self.idle_tx_max_age_sec})
             db.commit()
             # rowcount puede ser -1 en algunos drivers; usamos fetchall si hace falta
             try:

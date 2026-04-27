@@ -16,11 +16,14 @@ from app.alarms.models import (
     AlarmEvent,
 )
 from app.alarms.repository import AlarmRepository, deduplicate_rules
+from app.core.config import settings
 from app.core.logging import get_logger
 from app.schemas.notifications import AlarmNotificationPayload, NotificationJob
 
 logger = get_logger("alarms.service")
 _comm_loss_last_seen: dict[object, datetime] = {}
+DEFAULT_TAG_COMM_LOSS_TIMEOUT_SEC = settings.ALARM_TAG_COMM_LOSS_TIMEOUT_SEC
+DEFAULT_LAGOON_COMM_LOSS_TIMEOUT_SEC = settings.ALARM_LAGOON_COMM_LOSS_TIMEOUT_SEC
 
 
 @dataclass(slots=True)
@@ -711,7 +714,11 @@ def _evaluate_comm_loss(
     condition = definition.condition or {}
 
     timeout_sec = _to_float(condition.get("timeout_sec"))
-    timeout_sec = timeout_sec if timeout_sec is not None else 60.0
+    timeout_sec = (
+        timeout_sec
+        if timeout_sec is not None
+        else DEFAULT_TAG_COMM_LOSS_TIMEOUT_SEC
+    )
 
     if not tag_id:
         # A nivel laguna, comm-loss no puede disparar desde esta ruta,
@@ -759,7 +766,11 @@ def _evaluate_lagoon_comm_loss_by_clock(
     condition = definition.condition or {}
 
     timeout_sec = _to_float(condition.get("timeout_sec"))
-    timeout_sec = timeout_sec if timeout_sec is not None else 600.0
+    timeout_sec = (
+        timeout_sec
+        if timeout_sec is not None
+        else DEFAULT_LAGOON_COMM_LOSS_TIMEOUT_SEC
+    )
 
     last_seen_ts = _get_comm_loss_last_seen(definition)
     if last_seen_ts is None:

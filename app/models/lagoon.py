@@ -15,7 +15,6 @@ class Lagoon(Base):
     plc_type: Mapped[str | None] = mapped_column(String, nullable=True)
     timezone: Mapped[str | None] = mapped_column(String, nullable=True)
     ip: Mapped[str | None] = mapped_column(String, nullable=True)
-    scada_layout: Mapped[str | None] = mapped_column(String, nullable=True)
     enable: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,

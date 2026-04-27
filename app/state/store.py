@@ -4,11 +4,8 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
+from app.core.config import settings
 from app.core.logging import get_logger
-from app.scada.layout_resolver import (
-    DEFAULT_SCADA_LAYOUT,
-    normalize_scada_layout,
-)
 
 logger = get_logger("state.store")
 
@@ -42,7 +39,6 @@ class RealtimeStateStore:
 
         # Nuevo: timezone por laguna (precargado desde BD)
         self._lagoon_timezone: Dict[str, str] = {}
-        self._lagoon_layout: Dict[str, str] = {}
 
     # =====================================================
     # CONFIG
@@ -58,16 +54,6 @@ class RealtimeStateStore:
             return
 
         self._lagoon_timezone.pop(lagoon_id, None)
-
-    def set_lagoon_layout(
-        self,
-        lagoon_id: str,
-        layout_name: str | None,
-    ):
-        self._lagoon_layout[lagoon_id] = normalize_scada_layout(layout_name)
-
-    def get_lagoon_layout(self, lagoon_id: str) -> str:
-        return self._lagoon_layout.get(lagoon_id, DEFAULT_SCADA_LAYOUT)
 
     def preload_state(self, lagoon_id: str, tags: Dict[str, Any]):
         self._tags[lagoon_id].update(tags)
@@ -185,7 +171,7 @@ class RealtimeStateStore:
 
         return tags
 
-    def _compute_plc_status(self, lagoon_id: str, timeout_sec: int = 10) -> str:
+    def _compute_plc_status(self, lagoon_id: str) -> str:
         last_ts = self._last_ts.get(lagoon_id)
         if not last_ts:
             return "offline"
@@ -194,7 +180,11 @@ class RealtimeStateStore:
             last_dt = datetime.fromisoformat(last_ts)
             now = datetime.now(timezone.utc)
             diff = (now - last_dt).total_seconds()
-            return "online" if diff <= timeout_sec else "offline"
+            return (
+                "online"
+                if diff <= settings.SCADA_RUNTIME_PLC_OFFLINE_TIMEOUT_SEC
+                else "offline"
+            )
         except Exception:
             return "offline"
 
@@ -224,7 +214,6 @@ class RealtimeStateStore:
             "plc_status": self._compute_plc_status(lagoon_id),
             "local_time": self._compute_local_time(lagoon_id),
             "timezone": self._lagoon_timezone.get(lagoon_id),
-            "scada_layout": self.get_lagoon_layout(lagoon_id),
             "tags": self._payload_tags(lagoon_id),
             "pump_last_on": dict(self._pump_last_on.get(lagoon_id, {})),
             "start_ts": self._start_ts.get(lagoon_id),

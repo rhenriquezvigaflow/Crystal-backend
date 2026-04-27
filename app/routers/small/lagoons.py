@@ -6,7 +6,6 @@ from sqlalchemy.orm import Session
 
 from app.auth.jwt import get_current_user
 from app.auth.services.lagoon_service import (
-    PERMISSION_EDIT,
     PERMISSION_VIEW,
     ensure_lagoon_access,
     get_product_lagoons_for_user,
@@ -14,17 +13,13 @@ from app.auth.services.lagoon_service import (
 )
 from app.core.logging import get_logger
 from app.db.session import get_db
-from app.layout_config.schemas import LayoutConfigResponse, LayoutConfigUpdateRequest
-from app.layout_config.service import layout_config_service
 from app.models.role import ProductType
 from app.repositories.scada_event_repository import ScadaEventRepository
-from app.scada.layout_resolver import normalize_scada_layout
 from app.scada.history.repo import get_history_rows
 from app.schemas.scada import ScadaCurrent, ScadaSnapshot
 from app.schemas.scada_event import LastPumpEventsResponse
 from app.security.rbac import (
     SMALL_READ_ROLES,
-    SMALL_WRITE_ROLES,
     extract_user_roles,
     require_roles,
 )
@@ -76,100 +71,11 @@ def list_lagoons(
             "name": lagoon.name,
             "plc_type": lagoon.plc_type,
             "timezone": lagoon.timezone,
-            "scada_layout": normalize_scada_layout(lagoon.scada_layout),
             "enable": bool(lagoon.enable),
             "product_type": "small",
         }
         for lagoon in lagoons
     ]
-
-
-@router.get(
-    "/lagoons/{lagoon_id}/layout-config",
-    response_model=LayoutConfigResponse,
-)
-def small_get_lagoon_layout_config(
-    lagoon_id: str,
-    db: Session = Depends(get_db),
-    user: dict = Depends(get_current_user),
-):
-    user_id = _extract_user_id(user)
-    email = str(user.get("email", "-"))
-    roles = extract_user_roles(user)
-    lagoon = ensure_lagoon_access(
-        db=db,
-        user_id=user_id,
-        user_email=email,
-        user_roles=roles,
-        lagoon_id=lagoon_id,
-        permission=PERMISSION_VIEW,
-        expected_product_type=ProductType.SMALL,
-    )
-    config = layout_config_service.get_layout_config(
-        db=db,
-        lagoon=lagoon,
-    )
-    logger.info(
-        "[API] endpoint_response_summary endpoint=/api/small/lagoons/%s/layout-config method=GET user_id=%s layout_id=%s mapped_elements=%s",
-        lagoon_id,
-        user_id,
-        config.mapping.layout_id,
-        len(config.mapping.mapping_json),
-    )
-    return config
-
-
-@router.put(
-    "/lagoons/{lagoon_id}/layout-config",
-    response_model=LayoutConfigResponse,
-)
-def small_update_lagoon_layout_config(
-    lagoon_id: str,
-    payload: LayoutConfigUpdateRequest,
-    request: Request,
-    db: Session = Depends(get_db),
-    user: dict = Depends(require_roles(SMALL_WRITE_ROLES)),
-):
-    user_id = _extract_user_id(user)
-    email = str(user.get("email", "-"))
-    roles = extract_user_roles(user)
-    lagoon = ensure_lagoon_access(
-        db=db,
-        user_id=user_id,
-        user_email=email,
-        user_roles=roles,
-        lagoon_id=lagoon_id,
-        permission=PERMISSION_EDIT,
-        expected_product_type=ProductType.SMALL,
-    )
-
-    try:
-        config = layout_config_service.update_layout_config(
-            db=db,
-            lagoon=lagoon,
-            layout_id=payload.layout_id,
-            mapping_json=payload.mapping_json,
-        )
-        db.commit()
-    except Exception:
-        db.rollback()
-        raise
-
-    state_store = getattr(request.app.state, "state_store", None)
-    if state_store is not None:
-        state_store.set_lagoon_layout(
-            lagoon_id=lagoon_id,
-            layout_name=config.mapping.layout_id,
-        )
-
-    logger.info(
-        "[API] endpoint_response_summary endpoint=/api/small/lagoons/%s/layout-config method=PUT user_id=%s layout_id=%s upsert_count=%s",
-        lagoon_id,
-        user_id,
-        config.mapping.layout_id,
-        len(payload.mapping_json),
-    )
-    return config
 
 
 @router.get("/dashboard")

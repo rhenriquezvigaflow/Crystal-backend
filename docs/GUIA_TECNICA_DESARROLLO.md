@@ -29,7 +29,7 @@ DATABASE_URL=postgresql://postgres:postgres@localhost:5432/crystal
 COLLECTOR_API_KEY=replace-me
 JWT_SECRET_KEY=replace-me
 JWT_ALGORITHM=HS256
-JWT_ACCESS_TOKEN_EXPIRE_MINUTES=60
+JWT_ACCESS_TOKEN_EXPIRE_MINUTES=1080
 ```
 
 Variables utiles:

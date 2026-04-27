@@ -7,6 +7,7 @@ from typing import Any, DefaultDict, Set
 
 from fastapi import WebSocket, status
 
+from app.core.config import settings
 from app.core.logging import get_logger
 
 logger = get_logger("ws.manager")
@@ -36,8 +37,9 @@ class WebSocketManager:
     def __init__(self) -> None:
         self._lock = asyncio.Lock()
         self._connections: DefaultDict[str, Set[WebSocket]] = defaultdict(set)
-        self._send_timeout_sec = float(
-            os.getenv("WS_SEND_TIMEOUT_SEC", "2.0")
+        self._send_timeout_sec = max(
+            float(settings.WS_MIN_SEND_TIMEOUT_SEC),
+            float(settings.WS_SEND_TIMEOUT_SEC),
         )
 
     async def connect(self, lagoon_id: str, websocket: WebSocket) -> None:

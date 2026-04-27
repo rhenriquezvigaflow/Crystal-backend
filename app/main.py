@@ -15,7 +15,6 @@ from app.routers.health import router as health_router
 from app.routers.ingest import router as ingest_router
 from app.routers.alarm_thresholds import router as alarm_thresholds_router
 from app.routers.email import router as email_router
-from app.routers.scada_layouts import router as scada_layouts_router
 from app.routers.scada import router as scada_router
 from app.routers.events import router as scada_events_router
 from app.routers.small.control import router as small_control_router
@@ -55,10 +54,6 @@ async def lifespan(app: FastAPI):
             app.state.state_store.set_lagoon_timezone(
                 lagoon_id=lagoon.id,
                 timezone_str=lagoon.timezone,
-            )
-            app.state.state_store.set_lagoon_layout(
-                lagoon_id=lagoon.id,
-                layout_name=lagoon.scada_layout,
             )
 
         logger.info("Loaded lagoon runtime metadata count=%s", len(lagoons))
@@ -152,7 +147,6 @@ app.include_router(ingest_router)
 app.include_router(alarm_thresholds_router)
 app.include_router(email_router)
 app.include_router(websocket_router)
-app.include_router(scada_layouts_router)
 app.include_router(scada_router)
 app.include_router(scada_events_router)
 app.include_router(small_control_router)
