@@ -6,6 +6,7 @@ import re
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
+from app.core.lagoon_aliases import normalize_lagoon_id
 from app.core.logging import get_logger
 from app.db.session import get_db
 from app.models.lagoon import Lagoon
@@ -34,8 +35,9 @@ def _build_events_response(
     lagoon_id: str,
     events: list[dict],
 ) -> dict:
+    canonical_lagoon_id = normalize_lagoon_id(lagoon_id)
     return {
-        "lagoon_id": lagoon_id,
+        "lagoon_id": canonical_lagoon_id,
         "events": events,
     }
 
@@ -47,6 +49,7 @@ def list_scada_events(
     db: Session = Depends(get_db),
     user: dict = Depends(require_roles(ALL_READ_ROLES)),
 ):
+    lagoon_id = normalize_lagoon_id(lagoon_id)
     user_id, _roles = ensure_scada_read_access(
         db=db,
         user=user,
@@ -77,6 +80,7 @@ def list_scada_pump_events(
     db: Session = Depends(get_db),
     user: dict = Depends(require_roles(ALL_READ_ROLES)),
 ):
+    lagoon_id = normalize_lagoon_id(lagoon_id)
     user_id, _roles = ensure_scada_read_access(
         db=db,
         user=user,
@@ -109,6 +113,7 @@ def list_last_3_scada_pump_events(
     db: Session = Depends(get_db),
     user: dict = Depends(require_roles(ALL_READ_ROLES)),
 ):
+    lagoon_id = normalize_lagoon_id(lagoon_id)
     user_id, _roles = ensure_scada_read_access(
         db=db,
         user=user,
@@ -136,6 +141,7 @@ def download_pump_events_report(
     db: Session = Depends(get_db),
     user: dict = Depends(require_roles(ALL_READ_ROLES)),
 ):
+    lagoon_id = normalize_lagoon_id(lagoon_id)
     user_id, _roles = ensure_scada_read_access(
         db=db,
         user=user,

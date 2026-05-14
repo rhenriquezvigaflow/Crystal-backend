@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from app.auth.services.lagoon_service import PERMISSION_VIEW, ensure_lagoon_access
+from app.core.lagoon_aliases import normalize_lagoon_id
 from app.core.logging import get_logger
 from app.db.session import get_db
 from app.schemas.scada import ScadaSnapshot, ScadaCurrent
@@ -28,6 +29,7 @@ def last_minute(
     db: Session = Depends(get_db),
     user: dict = Depends(require_roles(ALL_READ_ROLES)),
 ):
+    lagoon_id = normalize_lagoon_id(lagoon_id)
     user_id = _extract_user_id(user)
     ensure_lagoon_access(
         db=db,
@@ -56,6 +58,7 @@ def current(
     db: Session = Depends(get_db),
     user: dict = Depends(require_roles(ALL_READ_ROLES)),
 ):
+    lagoon_id = normalize_lagoon_id(lagoon_id)
     user_id = _extract_user_id(user)
     ensure_lagoon_access(
         db=db,

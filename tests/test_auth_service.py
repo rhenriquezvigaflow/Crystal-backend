@@ -27,33 +27,33 @@ def test_build_login_response_uses_18_hour_expiry():
     assert response["user"]["roles"] == ["ADMIN"]
 
 
-def test_lagoon_comm_loss_default_timeout_is_1_hour():
+def test_lagoon_comm_loss_default_timeout_is_6_hours():
     now_utc = datetime.now(timezone.utc)
-    before_hour_definition = SimpleNamespace(
+    before_timeout_definition = SimpleNamespace(
         id=uuid4(),
         condition={},
-        last_seen_ts=now_utc - timedelta(minutes=59),
+        last_seen_ts=now_utc - timedelta(hours=5, minutes=59),
     )
 
-    before_hour = _evaluate_lagoon_comm_loss_by_clock(
-        definition=before_hour_definition,
+    before_timeout = _evaluate_lagoon_comm_loss_by_clock(
+        definition=before_timeout_definition,
         now_utc=now_utc,
         db=None,
     )
 
-    assert before_hour.should_alarm is False
-    assert "timeout_seg:3600.00" in before_hour.reason
+    assert before_timeout.should_alarm is False
+    assert "timeout_seg:21600.00" in before_timeout.reason
 
-    after_hour_definition = SimpleNamespace(
+    after_timeout_definition = SimpleNamespace(
         id=uuid4(),
         condition={},
-        last_seen_ts=now_utc - timedelta(minutes=61),
+        last_seen_ts=now_utc - timedelta(hours=6, minutes=1),
     )
-    after_hour = _evaluate_lagoon_comm_loss_by_clock(
-        definition=after_hour_definition,
+    after_timeout = _evaluate_lagoon_comm_loss_by_clock(
+        definition=after_timeout_definition,
         now_utc=now_utc,
         db=None,
     )
 
-    assert after_hour.should_alarm is True
-    assert "timeout_seg:3600.00" in after_hour.reason
+    assert after_timeout.should_alarm is True
+    assert "timeout_seg:21600.00" in after_timeout.reason

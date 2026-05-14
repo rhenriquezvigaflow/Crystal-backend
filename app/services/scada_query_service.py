@@ -5,6 +5,7 @@ from typing import Any, Literal
 
 from sqlalchemy.orm import Session
 
+from app.core.lagoon_aliases import normalize_lagoon_id
 from app.scada.history.repo import get_history_rows
 from app.services.scada_read_service import get_current
 from app.state.store import RealtimeStateStore
@@ -18,7 +19,8 @@ def get_realtime_payload(
     lagoon_id: str,
     state_store: RealtimeStateStore | None = None,
 ) -> dict[str, Any] | None:
-    return get_current(lagoon_id, db, state_store=state_store)
+    canonical_lagoon_id = normalize_lagoon_id(lagoon_id)
+    return get_current(canonical_lagoon_id, db, state_store=state_store)
 
 
 def get_history_payload(
@@ -30,9 +32,10 @@ def get_history_payload(
     resolution: Resolution,
     tags: list[str] | None,
 ) -> dict[str, Any]:
+    canonical_lagoon_id = normalize_lagoon_id(lagoon_id)
     data = get_history_rows(
         db=db,
-        lagoon_id=lagoon_id,
+        lagoon_id=canonical_lagoon_id,
         start_date=start_date,
         end_date=end_date,
         resolution=resolution,
@@ -54,7 +57,7 @@ def get_history_payload(
         )
 
     return {
-        "lagoon_id": lagoon_id,
+        "lagoon_id": canonical_lagoon_id,
         "resolution": data["resolution"],
         "source": data["source"],
         "series": [
@@ -70,8 +73,13 @@ def get_kpis_payload(
     lagoon_id: str,
     state_store: RealtimeStateStore | None,
 ) -> dict[str, Any] | None:
-    realtime = get_current(lagoon_id, db, state_store=state_store)
-    snapshot = state_store.snapshot(lagoon_id) if state_store is not None else {}
+    canonical_lagoon_id = normalize_lagoon_id(lagoon_id)
+    realtime = get_current(canonical_lagoon_id, db, state_store=state_store)
+    snapshot = (
+        state_store.snapshot(canonical_lagoon_id)
+        if state_store is not None
+        else {}
+    )
 
     if not realtime and not snapshot:
         return None
@@ -84,7 +92,7 @@ def get_kpis_payload(
     )
 
     return {
-        "lagoon_id": lagoon_id,
+        "lagoon_id": canonical_lagoon_id,
         "ts": (
             realtime.get("ts")
             if isinstance(realtime, dict)

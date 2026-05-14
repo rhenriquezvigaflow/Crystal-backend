@@ -24,9 +24,11 @@ class AlarmLagoonSignalMonitor:
     def __init__(self) -> None:
         self.enabled = settings.ALARM_LAGOON_SIGNAL_MONITOR_ENABLED
         self.check_interval_sec = settings.ALARM_LAGOON_SIGNAL_CHECK_INTERVAL_SEC
+        self.startup_grace_sec = settings.ALARM_LAGOON_SIGNAL_STARTUP_GRACE_SEC
 
         self._task: Optional[asyncio.Task] = None
         self._stop = asyncio.Event()
+        self._boot_utc = datetime.now(timezone.utc)
 
     async def start(self) -> None:
         if not self.enabled:
@@ -35,8 +37,9 @@ class AlarmLagoonSignalMonitor:
 
         self._task = asyncio.create_task(self._run())
         logger.info(
-            "[ALARM MONITOR] iniciado interval_sec=%s",
+            "[ALARM MONITOR] iniciado interval_sec=%s startup_grace_sec=%s",
             self.check_interval_sec,
+            self.startup_grace_sec,
         )
 
     async def stop(self) -> None:
@@ -68,6 +71,15 @@ class AlarmLagoonSignalMonitor:
 
     def _check_once(self) -> None:
         now_utc = datetime.now(timezone.utc)
+        boot_age_sec = (now_utc - self._boot_utc).total_seconds()
+
+        if boot_age_sec < self.startup_grace_sec:
+            logger.info(
+                "[ALARM MONITOR] startup_grace lagoon_checks_skipped=true boot_age_sec=%.1f startup_grace_sec=%.1f",
+                boot_age_sec,
+                self.startup_grace_sec,
+            )
+            return
 
         db = SessionLocal()
         transitions = []

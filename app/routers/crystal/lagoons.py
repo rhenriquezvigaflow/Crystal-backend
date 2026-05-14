@@ -11,6 +11,7 @@ from app.auth.services.lagoon_service import (
     get_product_lagoons_for_user,
     resolve_permitted_product_types,
 )
+from app.core.lagoon_aliases import normalize_lagoon_id
 from app.core.logging import get_logger
 from app.db.session import get_db
 from app.models.role import ProductType
@@ -45,6 +46,7 @@ def list_lagoons(
     db: Session = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
+    lagoon_id = normalize_lagoon_id(lagoon_id)
     user_id = _extract_user_id(user)
     email = str(user.get("email", "-"))
     roles = extract_user_roles(user)
@@ -83,6 +85,7 @@ def crystal_dashboard(
     db: Session = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
+    lagoon_id = normalize_lagoon_id(lagoon_id)
     user_id = _extract_user_id(user)
     email = str(user.get("email", "-"))
     roles = extract_user_roles(user)
@@ -114,6 +117,7 @@ def crystal_last_minute(
     db: Session = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
+    lagoon_id = normalize_lagoon_id(lagoon_id)
     user_id = _extract_user_id(user)
     email = str(user.get("email", "-"))
     roles = extract_user_roles(user)
@@ -150,6 +154,7 @@ def crystal_current(
     db: Session = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
+    lagoon_id = normalize_lagoon_id(lagoon_id)
     user_id = _extract_user_id(user)
     email = str(user.get("email", "-"))
     roles = extract_user_roles(user)

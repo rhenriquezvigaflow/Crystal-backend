@@ -1,35 +1,28 @@
-﻿# API Alarmas de Umbral PT/FIT
+# API Alarmas de Umbral PT/FIT
 
-**Actualizado:** 2026-04-09
+**Actualizado:** 2026-04-27
 
----
+## Rutas Disponibles
 
-## Rutas disponibles
-
-Rutas base:
+Lectura:
 
 - `GET /alarms/{lagoon_id}/thresholds/pt-fit/view`
+
+Escritura:
+
 - `PUT /alarms/{lagoon_id}/thresholds/pt-fit`
 
-Aliases de compatibilidad:
+Detras de proxy, el frontend normalmente las consume como:
 
-- `GET|PUT /crystal/alarms/{lagoon_id}/thresholds/pt-fit[/view]`
-- `GET|PUT /small/alarms/{lagoon_id}/thresholds/pt-fit[/view]`
-- `GET|PUT /api/alarms/{lagoon_id}/thresholds/pt-fit[/view]`
-- `GET|PUT /api/crystal/alarms/{lagoon_id}/thresholds/pt-fit[/view]`
-- `GET|PUT /api/small/alarms/{lagoon_id}/thresholds/pt-fit[/view]`
+- `GET /api/alarms/{lagoon_id}/thresholds/pt-fit/view`
+- `PUT /api/alarms/{lagoon_id}/thresholds/pt-fit`
 
-Nota:
+No hay aliases activos `/crystal/alarms/*` ni `/small/alarms/*` registrados en `app/main.py`.
 
-- El frontend usa prefijo cacheado por laguna y fallback entre rutas.
-- La vista `/view` es el contrato recomendado para lectura.
+## Obtener Vista Consolidada
 
----
-
-## Obtener vista consolidada
-
-```bash
-curl -k -X GET "$BASE_URL/alarms/$LAGOON_ID/thresholds/pt-fit/view" \
+```powershell
+curl -X GET "$BASE_URL/alarms/$LAGOON_ID/thresholds/pt-fit/view" `
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -52,14 +45,12 @@ Respuesta:
 }
 ```
 
----
+## Guardar Umbrales
 
-## Guardar umbrales
-
-```bash
-curl -k -X PUT "$BASE_URL/alarms/$LAGOON_ID/thresholds/pt-fit" \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
+```powershell
+curl -X PUT "$BASE_URL/alarms/$LAGOON_ID/thresholds/pt-fit" `
+  -H "Authorization: Bearer $TOKEN" `
+  -H "Content-Type: application/json" `
   -d '{
     "items": [
       {
@@ -73,19 +64,27 @@ curl -k -X PUT "$BASE_URL/alarms/$LAGOON_ID/thresholds/pt-fit" \
   }'
 ```
 
----
+Respuesta:
 
-## Validaciones funcionales
+```json
+{
+  "ok": true,
+  "lagoon_id": "costa_del_lago",
+  "created": ["threshold_PT117_R_SCADA_min"],
+  "updated": ["threshold_PT117_R_SCADA_max"]
+}
+```
+
+## Validaciones Funcionales
 
 - `tag_id` debe iniciar con `PT` o `FIT`.
 - Debe venir `min_value` o `max_value`.
 - Si vienen ambos, `min_value < max_value`.
 - `severity` en `info|warning|critical`.
 - `items` no puede estar vacio.
+- El usuario debe tener permiso `can_view` para lectura y `can_edit` para escritura.
 
----
-
-## Integracion frontend
+## Integracion Frontend
 
 Archivos:
 
@@ -96,6 +95,6 @@ Archivos:
 
 La UI mezcla:
 
-- filas `configured` desde backend,
-- candidatos PT/FIT detectados por realtime,
+- filas `configured` desde backend;
+- candidatos PT/FIT detectados por realtime;
 - permisos `can_edit` para habilitar guardado.

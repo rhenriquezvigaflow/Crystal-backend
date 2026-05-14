@@ -14,6 +14,7 @@ from app.auth.services.lagoon_service import (
     PERMISSION_VIEW,
     ensure_lagoon_access,
 )
+from app.core.lagoon_aliases import normalize_lagoon_id
 from app.core.logging import get_logger
 from app.db.session import get_db
 from app.security.rbac import ALL_READ_ROLES, extract_user_roles, require_roles
@@ -38,6 +39,7 @@ def get_pt_fit_thresholds_view(
     db: Session = Depends(get_db),
     user: dict = Depends(require_roles(ALL_READ_ROLES)),
 ):
+    lagoon_id = normalize_lagoon_id(lagoon_id)
     user_id = _extract_user_id(user)
     ensure_lagoon_access(
         db=db,
@@ -82,6 +84,7 @@ def upsert_pt_fit_thresholds(
     db: Session = Depends(get_db),
     user: dict = Depends(require_roles(ALL_READ_ROLES)),
 ):
+    lagoon_id = normalize_lagoon_id(lagoon_id)
     user_id = _extract_user_id(user)
     ensure_lagoon_access(
         db=db,

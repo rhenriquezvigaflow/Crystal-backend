@@ -21,12 +21,6 @@ LAYOUT2_VALVE_TAG_SOURCES: Dict[str, tuple[str, ...]] = {
 LAYOUT2_VALVE_DEFAULT_STATE = 0
 LAYOUT2_VALVE_VALID_STATES = {0, 1, 2, 3}
 LAYOUT2_VALVE_CANONICAL_TAGS = set(LAYOUT2_VALVE_TAG_SOURCES.keys())
-LAYOUT2_VALVE_ALIAS_TAGS = {
-    source_tag
-    for final_tag, source_tags in LAYOUT2_VALVE_TAG_SOURCES.items()
-    for source_tag in source_tags
-    if source_tag != final_tag
-}
 
 
 class RealtimeStateStore:
@@ -160,11 +154,7 @@ class RealtimeStateStore:
         return normalized_tags
 
     def _payload_tags(self, lagoon_id: str) -> Dict[str, Any]:
-        tags = {
-            tag_id: value
-            for tag_id, value in self._tags.get(lagoon_id, {}).items()
-            if tag_id not in LAYOUT2_VALVE_ALIAS_TAGS
-        }
+        tags = dict(self._tags.get(lagoon_id, {}))
 
         for tag_id in LAYOUT2_VALVE_CANONICAL_TAGS:
             tags.setdefault(tag_id, LAYOUT2_VALVE_DEFAULT_STATE)

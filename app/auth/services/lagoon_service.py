@@ -6,6 +6,7 @@ from fastapi import HTTPException
 from sqlalchemy import or_, text
 from sqlalchemy.orm import Session
 
+from app.core.lagoon_aliases import normalize_lagoon_id
 from app.core.logging import get_logger
 from app.models.lagoon import Lagoon
 from app.models.role import ProductType
@@ -108,10 +109,11 @@ def _lagoon_product_value(lagoon: Lagoon) -> str:
 
 
 def get_lagoon_by_id(db: Session, lagoon_id: str) -> Lagoon | None:
+    canonical_lagoon_id = normalize_lagoon_id(lagoon_id)
     return (
         db.query(Lagoon)
         .filter(
-            Lagoon.id == lagoon_id,
+            Lagoon.id == canonical_lagoon_id,
             Lagoon.enable.is_(True),
         )
         .first()
@@ -128,15 +130,17 @@ def ensure_lagoon_access(
     permission: str = PERMISSION_VIEW,
     expected_product_type: ProductType | None = None,
 ) -> Lagoon:
-    lagoon = get_lagoon_by_id(db=db, lagoon_id=lagoon_id)
+    canonical_lagoon_id = normalize_lagoon_id(lagoon_id)
+    lagoon = get_lagoon_by_id(db=db, lagoon_id=canonical_lagoon_id)
     roles = sorted(_normalize_roles(user_roles))
     permitted_products = sorted(resolve_permitted_product_types(roles))
 
     if lagoon is None:
         logger.warning(
-            "[LAGOON ACCESS] not_found user_id=%s email=%s lagoon_id=%s roles=%s permitted_products=%s",
+            "[LAGOON ACCESS] not_found user_id=%s email=%s lagoon_id=%s requested_lagoon_id=%s roles=%s permitted_products=%s",
             user_id,
             user_email,
+            canonical_lagoon_id,
             lagoon_id,
             roles,
             permitted_products,
@@ -146,9 +150,10 @@ def ensure_lagoon_access(
     lagoon_product = _lagoon_product_value(lagoon)
     if expected_product_type and lagoon_product != expected_product_type.value:
         logger.warning(
-            "[LAGOON ACCESS] product_mismatch user_id=%s email=%s lagoon_id=%s lagoon_product=%s expected_product=%s roles=%s",
+            "[LAGOON ACCESS] product_mismatch user_id=%s email=%s lagoon_id=%s requested_lagoon_id=%s lagoon_product=%s expected_product=%s roles=%s",
             user_id,
             user_email,
+            canonical_lagoon_id,
             lagoon_id,
             lagoon_product,
             expected_product_type.value,
@@ -158,9 +163,10 @@ def ensure_lagoon_access(
 
     if lagoon_product in permitted_products:
         logger.info(
-            "[RBAC] user_scope_resolved user_id=%s email=%s lagoon_id=%s lagoon_product=%s permission=%s mode=product_admin roles=%s permitted_products=%s",
+            "[RBAC] user_scope_resolved user_id=%s email=%s lagoon_id=%s requested_lagoon_id=%s lagoon_product=%s permission=%s mode=product_admin roles=%s permitted_products=%s",
             user_id,
             user_email,
+            canonical_lagoon_id,
             lagoon_id,
             lagoon_product,
             permission,
@@ -175,13 +181,14 @@ def ensure_lagoon_access(
     if not user_has_permission(
         db=db,
         user_id=user_id,
-        lagoon_id=lagoon_id,
+        lagoon_id=canonical_lagoon_id,
         permission=permission,
     ):
         logger.warning(
-            "[LAGOON ACCESS] denied user_id=%s email=%s lagoon_id=%s lagoon_product=%s permission=%s roles=%s permitted_products=%s",
+            "[LAGOON ACCESS] denied user_id=%s email=%s lagoon_id=%s requested_lagoon_id=%s lagoon_product=%s permission=%s roles=%s permitted_products=%s",
             user_id,
             user_email,
+            canonical_lagoon_id,
             lagoon_id,
             lagoon_product,
             permission,
@@ -191,9 +198,10 @@ def ensure_lagoon_access(
         raise HTTPException(status_code=403, detail="Forbidden")
 
     logger.info(
-        "[RBAC] user_scope_resolved user_id=%s email=%s lagoon_id=%s lagoon_product=%s permission=%s mode=fine_grained roles=%s permitted_products=%s",
+        "[RBAC] user_scope_resolved user_id=%s email=%s lagoon_id=%s requested_lagoon_id=%s lagoon_product=%s permission=%s mode=fine_grained roles=%s permitted_products=%s",
         user_id,
         user_email,
+        canonical_lagoon_id,
         lagoon_id,
         lagoon_product,
         permission,
@@ -267,6 +275,7 @@ def user_has_permission(
     permission: str,
 ) -> bool:
     permission_column = _validate_permission(permission)
+    canonical_lagoon_id = normalize_lagoon_id(lagoon_id)
     exists = db.execute(
         text(
             f"""
@@ -284,7 +293,7 @@ def user_has_permission(
         ),
         {
             "user_id": user_id,
-            "lagoon_id": lagoon_id,
+            "lagoon_id": canonical_lagoon_id,
         },
     ).scalar()
 

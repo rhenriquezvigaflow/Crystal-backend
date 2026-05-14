@@ -204,12 +204,16 @@ class Settings(BaseSettings):
         description="Default comm loss timeout for tag-level alarms in seconds",
     )
     ALARM_LAGOON_COMM_LOSS_TIMEOUT_SEC: float = Field(
-        default=3600,
+        default=21600,
         description="Default comm loss timeout for lagoon-level alarms in seconds",
     )
     ALARM_LAGOON_SIGNAL_MONITOR_ENABLED: bool = Field(
         default=True,
         description="Enable background monitor for lagoon no-signal alarms",
+    )
+    ALARM_LAGOON_SIGNAL_STARTUP_GRACE_SEC: float = Field(
+        default=120,
+        description="Startup grace period for lagoon no-signal monitor in seconds",
     )
     ALARM_LAGOON_SIGNAL_CHECK_INTERVAL_SEC: float = Field(
         default=30,

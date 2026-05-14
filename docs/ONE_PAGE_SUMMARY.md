@@ -1,125 +1,82 @@
-﻿# One-Page Summary - Crystal Lagoons Backend
+# One-Page Summary - Crystal Lagoons Backend
 
-**Version doc:** 1.4.0
-**Actualizado:** 2026-04-09
+**Version doc:** 2.0.0  
+**Actualizado:** 2026-04-27
 
----
-
-## Arquitectura en 30 segundos
+## Arquitectura en 30 Segundos
 
 ```text
-SCADA Collector -- POST /ingest/scada + x-api-key --> FastAPI
+SCADA Collector -- POST /ingest/scada + X-Api-Key --> FastAPI
                                                         |
                                                         +--> IngestService -> scada_event / scada_minute
                                                         +--> Alarm engine -> alarm_event / notifications
                                                         +--> RealtimeStateStore -> WebSocket tick
-                                                        +--> LayoutConfigService -> layouts / lagoon_layout_mapping
                                                         +--> PostgreSQL
+                                                        +--> REST /scada/*, /lagoons, /alarms/*
 ```
 
 El backend expone:
 
 - Login JWT (`POST /auth/login`).
-- Lecturas SCADA (`/scada/*`).
-- APIs por producto (`/api/crystal/*`, `/api/small/*`).
-- Layout SCADA dinamico (`/layouts`, `/lagoons/{id}/mapping`, `/api/{product}/lagoons/{id}/layout-config`).
-- Alarmas PT/FIT (`/alarms/{id}/thresholds/pt-fit`).
-- WebSockets autenticados (`/ws/*`).
+- Catalogo RBAC de lagunas (`GET /lagoons`).
+- Lecturas SCADA (`/scada/{lagoon_id}/*`).
+- Alarmas PT/FIT (`/alarms/{lagoon_id}/thresholds/pt-fit`).
+- WebSocket autenticado (`/ws/scada/{lagoon_id}`).
+- Endpoints Small operativos bajo `/api/small/*`.
 
----
+El layout visual de la UI vive en el frontend: `crystal-frontend/src/assets/positions/*.json`.
 
-## Flujo principal ingest
+## Flujo Principal Ingest
 
 1. Collector envia `{lagoon_id, timestamp?, tags}` a `POST /ingest/scada`.
-2. Backend valida `x-api-key`.
-3. `IngestService` persiste eventos y buckets por minuto.
-4. Se evaluan alarmas.
-5. Se actualiza `RealtimeStateStore`.
-6. Se emite `tick` por WebSocket a la laguna.
-7. Respuesta HTTP: `{"ok": true}`.
-
----
-
-## Layout SCADA dinamico
-
-Objetivo: reutilizar un mismo SVG/layout en varias lagunas, cambiando solo tags, labels y estados por mapping.
-
-Tablas:
-
-- `layouts`: define layout reutilizable en `json_definition`.
-- `lagoon_layout_mapping`: define `mapping_json` por `(lagoon_id, layout_id)`.
-
-Endpoints principales:
-
-- `GET /layouts/{layout_id}`
-- `GET /lagoons/{lagoon_id}/mapping`
-- `PUT /lagoons/{lagoon_id}/mapping`
-- `GET|PUT /api/{product}/lagoons/{lagoon_id}/layout-config`
-
-`mapping_json`:
-
-```json
-{
-  "pressure_1": { "tag": "PT117_R_SCADA", "label": "PT_117" },
-  "pump_filtracion": { "tag": "P006_STS_SCADA", "label": "Bomba Filtracion" }
-}
-```
-
-Reglas:
-
-- Las claves del mapping deben existir en `layout.json_definition.elements[].id`.
-- `collector_tags` se entrega al frontend para ocultar tarjetas cuyo tag no esta habilitado por collector.
-- `always_visible=true` permite mostrar elementos como `RETRO_SCADA` aun sin dato realtime.
-- Cache in-memory configurable con `SCADA_LAYOUT_CACHE_TTL_SEC` o `LAYOUT_CONFIG_CACHE_TTL_SEC`.
-
----
+2. Backend valida `X-Api-Key`.
+3. Si existe `sp_sync_collector_tags_and_alarms`, sincroniza tags/definiciones.
+4. `IngestService` persiste eventos y buckets por minuto.
+5. Se evaluan alarmas.
+6. Se actualiza `RealtimeStateStore`.
+7. Se emite `tick` por WebSocket a la laguna.
+8. Respuesta HTTP: `{"ok": true}`.
 
 ## Seguridad
 
 Ingest:
 
-- Header obligatorio: `x-api-key: <COLLECTOR_API_KEY>`.
+- Header obligatorio: `X-Api-Key: <COLLECTOR_API_KEY>`.
 
 API usuario:
 
 - `Authorization: Bearer <token>`.
-- Roles: `AdminCrystal`, `VisualCrystal`, `AdminSmall`, `VisualSmall`, `SuperAdmin`.
+- Roles: `AdminCrystal`, `VisualCrystal`, `AdminSmall`, `SuperAdmin`.
 - Permisos por laguna desde `vw_user_lagoons`: `can_view`, `can_edit`, `can_control`.
 
 WebSocket:
 
-- Token por query `token=<jwt>` o header `Authorization`.
-- Requiere `can_view` para la laguna.
+- Token por query o subprotocol.
+- Requiere `can_view` o alcance por producto.
 
----
+## Base de Datos Clave
 
-## Base de datos clave
-
-- `lagoons`: catalogo, timezone, `scada_layout`, `product_type`, `enable`.
-- `layouts`: layout reusable y `json_definition`.
-- `lagoon_layout_mapping`: mapping por laguna/layout.
-- `collector_tag_registry`: tags habilitados por collector para cada laguna.
+- `lagoons`: catalogo, timezone, `product_type`, `enable`.
 - `scada_event`: cambios de estado.
 - `scada_minute`: valores historicos por minuto.
 - `alarm_definition`, `alarm_event`, `alarm_notification_rule`.
 - `users`, `roles`, `user_roles`.
 
-Vistas:
+Vistas/funciones esperadas por algunos flujos:
 
 - `vw_user_lagoons`.
 - `vw_scada_last_3_pump_actions`.
 - `scada_minute_hourly`, `scada_minute_daily`, `scada_minute_weekly` si existen.
 - `vw_alarm_thresholds_pt_fit_lagoon`.
+- `sp_sync_collector_tags_and_alarms`, opcional.
 
----
+## Setup Minimo
 
-## Setup minimo
-
-```bash
+```powershell
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
-python -m uvicorn app.main:app --reload
+python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8090
 ```
 
 Variables minimas:
@@ -129,8 +86,6 @@ DATABASE_URL=postgresql://postgres:postgres@localhost:5432/crystal
 COLLECTOR_API_KEY=replace-me
 JWT_SECRET_KEY=replace-me
 ```
-
----
 
 Mas detalle:
 

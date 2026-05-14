@@ -6,6 +6,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
+from app.core.lagoon_aliases import normalize_lagoon_id
 from app.core.logging import get_logger
 from app.db.session import get_db
 from app.schemas.scada import ScadaCurrent, ScadaKpis
@@ -28,6 +29,7 @@ def get_scada_realtime(
     db: Session = Depends(get_db),
     user: dict = Depends(require_roles(ALL_READ_ROLES)),
 ):
+    lagoon_id = normalize_lagoon_id(lagoon_id)
     user_id, _roles = ensure_scada_read_access(
         db=db,
         user=user,
@@ -60,6 +62,7 @@ def get_scada_history(
     db: Session = Depends(get_db),
     user: dict = Depends(require_roles(ALL_READ_ROLES)),
 ):
+    lagoon_id = normalize_lagoon_id(lagoon_id)
     user_id, roles = ensure_scada_read_access(
         db=db,
         user=user,
@@ -93,6 +96,7 @@ def get_scada_kpis(
     db: Session = Depends(get_db),
     user: dict = Depends(require_roles(ALL_READ_ROLES)),
 ):
+    lagoon_id = normalize_lagoon_id(lagoon_id)
     user_id, _roles = ensure_scada_read_access(
         db=db,
         user=user,

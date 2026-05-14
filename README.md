@@ -1,31 +1,35 @@
 # Crystal Lagoons - SCADA Backend
 
-Backend FastAPI para ingesta SCADA, lectura realtime, historico, layouts dinamicos y motor de alarmas.
+Backend FastAPI para ingesta SCADA, lectura realtime, historico, eventos, RBAC y motor de alarmas.
 
-## Alcance actual
+## Alcance Actual
 
 - `POST /ingest/scada` protegido con `X-Api-Key`.
-- estado realtime en memoria + broadcast WebSocket.
-- persistencia de `scada_minute` y `scada_event`.
-- consultas SCADA (`current`, `last-minute`, `history`, `events`, `pump-events`).
+- Estado realtime en memoria + broadcast WebSocket.
+- Persistencia de `scada_minute` y `scada_event`.
+- Consultas SCADA (`realtime`, `history`, `kpis`, `events`, `pump-events`).
 - RBAC por laguna para lectura, edicion y control.
-- layouts backend-driven (`layouts` + `lagoon_layout_mapping`).
-- alarmas `state`, `comm_loss` y `threshold`.
-- notificaciones por email reales via SMTP y webhook simulado por log.
+- Catalogo de lagunas desde tabla `lagoons`.
+- Alarmas `state`, `comm_loss` y `threshold`.
+- Umbrales PT/FIT configurables.
+- Notificaciones por email reales via SMTP y webhook simulado por log.
 
-## Como se integra con frontend y collector
+Nota importante: el backend actual no registra endpoints de layouts/mapping SCADA. La UI visual carga escenas locales desde `crystal-frontend/src/assets/positions/*.json`.
+
+## Integracion con Frontend y Collector
 
 ```text
 collector_python
   -> POST /ingest/scada
+  -> sync collector tags/alarms si existe la funcion SQL
+  -> persist scada_minute / scada_event
   -> evaluate_alarms()
-  -> commit DB
   -> dispatch_notifications()
   -> state_store + ws_manager
   -> crystal-frontend
 ```
 
-## Nota sobre prefijos `/api`
+## Prefijo `/api`
 
 El backend define rutas sin prefijo en codigo (`/health`, `/scada/...`, `/alarms/...`), pero la app corre con `root_path="/api"` para despliegues detras de proxy.
 
@@ -34,7 +38,9 @@ En practica:
 - backend directo local: `/health`, `/scada/...`
 - frontend o proxy IIS/Vite: `/api/health`, `/api/scada/...`
 
-## Puesta en marcha
+Hay routers que ya incluyen `/api/small` en su propio prefijo; no duplicar `/api/api/small`.
+
+## Puesta en Marcha
 
 ### 1. Instalar dependencias
 
@@ -82,19 +88,22 @@ Alternativa:
 run_backend.bat
 ```
 
-## Modulos principales
+## Modulos Principales
 
-- `app/main.py`: bootstrap, CORS, lifespan, watchdog, signal monitor.
+- `app/main.py`: bootstrap, CORS, lifespan, watchdog y signal monitor.
 - `app/routers/ingest.py`: entrada de telemetria del collector.
 - `app/services/ingest_service.py`: minute buffers y eventos SCADA.
+- `app/routers/scada.py`: realtime HTTP, historico y KPIs.
+- `app/routers/events.py`: eventos y reportes XLSX.
+- `app/routers/websocket.py`: WebSocket autenticado por laguna.
+- `app/auth/auth.py`: login JWT.
+- `app/auth/routers/lagoons_router.py`: lagunas y permisos RBAC.
 - `app/alarms/service.py`: evaluacion y transiciones OPEN/CLOSE.
+- `app/alarms/thresholds/*`: umbrales PT/FIT.
 - `app/integration/notifications.py`: orquestador de canales.
 - `app/services/email_service.py`: render de plantilla y envio SMTP.
-- `app/routers/scada_layouts.py`: layouts y mapping por laguna.
-- `app/routers/scada.py`, `scada_read.py`, `events.py`: lectura HTTP.
-- `app/routers/websocket.py`: WebSocket autenticado por laguna.
 
-## Endpoints clave
+## Endpoints Activos
 
 Salud:
 
@@ -115,20 +124,21 @@ Ingesta:
 
 SCADA:
 
-- `GET /scada/{lagoon_id}/last-minute`
-- `GET /scada/{lagoon_id}/current`
 - `GET /scada/{lagoon_id}/realtime`
-- `GET /scada/{lagoon_id}/kpis`
 - `GET /scada/{lagoon_id}/history`
+- `GET /scada/{lagoon_id}/kpis`
 - `GET /scada/{lagoon_id}/events`
 - `GET /scada/{lagoon_id}/pump-events`
 - `GET /scada/{lagoon_id}/pump-events/last-3`
+- `GET /scada/{lagoon_id}/pump-events/report.xlsx`
 
-Layouts:
+Small:
 
-- `GET /layouts/{layout_id}`
-- `GET /lagoons/{lagoon_id}/mapping`
-- `PUT /lagoons/{lagoon_id}/mapping`
+- `POST /api/small/control`
+- `PUT /api/small/control`
+- `GET /api/small/chemicals`
+- `POST /api/small/chemicals`
+- `DELETE /api/small/chemicals`
 
 Alarmas y notificaciones:
 
@@ -140,22 +150,33 @@ WebSocket:
 
 - `WS /ws/scada/{lagoon_id}`
 
-## Documentacion mantenida
+## Seguridad
 
-- `docs/INDEX.md`: mapa de documentacion.
-- `docs/ALARMAS_ACTUALES_Y_LOGICA.md`: motor de alarmas y enrutamiento.
-- `docs/EMAIL_NOTIFICATIONS.md`: flujo SMTP, payload y endpoint manual.
-- `docs/README_ALARM_THRESHOLDS_API.md`: contrato PT/FIT.
+- Ingest exige `X-Api-Key`.
+- REST protegido exige `Authorization: Bearer <jwt>`.
+- WebSocket acepta token por query string o subprotocol.
+- Roles soportados: `AdminCrystal`, `VisualCrystal`, `AdminSmall`, `SuperAdmin`.
+- Permisos finos por laguna vienen de `vw_user_lagoons`.
 
 ## Observabilidad
 
-- `GET /health/ready` reporta estado de DB, watchdog, signal monitor y estadisticas WS.
-- los loggers `alarms.*` pueden escribir en `logs/alarmas.txt`.
-- el ingest registra filas de minuto, eventos y transiciones de alarmas.
+- `GET /health/ready` reporta DB, watchdog, signal monitor y estadisticas WS.
+- Los loggers `alarms.*` pueden escribir en `logs/alarmas.txt`.
+- El ingest registra filas de minuto, eventos y transiciones de alarmas.
 
-## Notas operativas
+## Documentacion Mantenida
 
-- las notificaciones se despachan siempre post-commit.
-- solo las aperturas (`OPEN`) generan jobs de notificacion automaticos.
+- `docs/INDEX.md`: mapa de documentacion.
+- `docs/ONE_PAGE_SUMMARY.md`: resumen operativo.
+- `docs/ARQUITECTURA_Y_FLUJO.md`: arquitectura vigente.
+- `docs/FLUJO_INSERCION.md`: flujo de ingest y alta de lagunas.
+- `docs/ALARMAS_ACTUALES_Y_LOGICA.md`: motor de alarmas.
+- `docs/EMAIL_NOTIFICATIONS.md`: flujo SMTP.
+- `docs/README_ALARM_THRESHOLDS_API.md`: contrato PT/FIT.
+
+## Notas Operativas
+
+- Las notificaciones se despachan siempre post-commit.
+- Solo las aperturas (`OPEN`) generan jobs de notificacion automaticos.
 - `webhook` sigue simulado; no hay POST HTTP real.
-- el frontend actual consume estas rutas via `/api/*` detras de proxy.
+- Si se agrega una laguna o cambia su timezone directamente en BD, reiniciar backend precarga metadata en `RealtimeStateStore`.

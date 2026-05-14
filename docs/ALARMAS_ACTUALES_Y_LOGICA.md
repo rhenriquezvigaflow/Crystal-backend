@@ -1,5 +1,7 @@
 # Alarmas SCADA: estado actual y logica
 
+**Actualizado:** 2026-04-27
+
 Documento alineado al codigo actual del backend. Este archivo describe la logica soportada por el motor; no fija inventarios numericos de BD para evitar que la documentacion quede obsoleta.
 
 ## Flujo real del motor

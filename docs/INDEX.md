@@ -2,21 +2,44 @@
 
 Indice curado de la documentacion vigente.
 
-## Punto de entrada recomendado
+## Punto de Entrada Recomendado
 
 1. `../README.md`
-2. `ALARMAS_ACTUALES_Y_LOGICA.md`
-3. `EMAIL_NOTIFICATIONS.md`
-4. `README_ALARM_THRESHOLDS_API.md`
+2. `ONE_PAGE_SUMMARY.md`
+3. `ARQUITECTURA_Y_FLUJO.md`
+4. `FLUJO_INSERCION.md`
+5. `ALARMAS_ACTUALES_Y_LOGICA.md`
+6. `EMAIL_NOTIFICATIONS.md`
+7. `README_ALARM_THRESHOLDS_API.md`
 
-## Fuente de verdad por tema
+## Fuente de Verdad por Tema
 
-### Backend operativo
+### Backend Operativo
 
 - `../README.md`
   - setup rapido
-  - rutas clave
+  - endpoints activos
   - diferencia entre rutas directas y rutas proxied por `/api`
+
+### Arquitectura
+
+- `ONE_PAGE_SUMMARY.md`
+  - mapa de 1 pagina
+  - componentes principales
+  - seguridad y BD clave
+- `ARQUITECTURA_Y_FLUJO.md`
+  - ciclo de vida
+  - ingest
+  - WebSocket
+  - historico
+
+### Alta de Lagunas e Ingest
+
+- `FLUJO_INSERCION.md`
+  - payload de ingest
+  - metadata minima en BD
+  - integracion con collector
+  - relacion con escenas locales del frontend
 
 ### Alarmas
 
@@ -26,7 +49,7 @@ Indice curado de la documentacion vigente.
   - precedencia de reglas de notificacion
   - limites actuales
 
-### Email y notificaciones
+### Email y Notificaciones
 
 - `EMAIL_NOTIFICATIONS.md`
   - flujo post-commit
@@ -39,23 +62,19 @@ Indice curado de la documentacion vigente.
 - `README_ALARM_THRESHOLDS_API.md`
   - contrato del endpoint
   - request/response
-  - semantica de tags configurados vs candidatos
+  - validaciones
 
-## Documentos de contexto adicional
+## Documentos de Contexto Adicional
 
-Estos documentos siguen siendo utiles para onboarding o contexto historico, pero no reemplazan la fuente de verdad anterior:
-
-- `ARQUITECTURA_Y_FLUJO.md`
 - `ARQUITECTURA_END_TO_END_COLLECTOR_BACKEND.md`
-- `FLUJO_INSERCION.md`
 - `GUIA_TECNICA_DESARROLLO.md`
 - `ONBOARDING.md`
 - `DIAGRAMAS_FLUJOS.md`
-- `ONE_PAGE_SUMMARY.md`
 - `CHANGELOG.md`
 
-## Criterio actual de mantenimiento
+## Criterio Actual de Mantenimiento
 
-- si una ruta, payload o variable de entorno cambia, se actualiza primero `README.md`
-- si el cambio toca alarmas o notificaciones, se actualiza ademas el documento tematico correspondiente
-- se evita repetir tablas inventariadas desde BD dentro de documentos estaticos; para eso se prefieren queries o referencias al codigo
+- Si cambia una ruta activa, se actualiza `../README.md` y `ARQUITECTURA_Y_FLUJO.md`.
+- Si cambia el contrato consumido por frontend, se actualiza tambien `crystal-frontend/docs/API_CONTRACTS.md`.
+- Si el cambio toca alarmas o notificaciones, se actualiza el documento tematico correspondiente.
+- Los layouts visuales viven hoy en frontend como JSON locales; no documentar endpoints de layout backend si no estan registrados en `app/main.py`.

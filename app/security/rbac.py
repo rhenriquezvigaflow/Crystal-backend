@@ -21,6 +21,7 @@ from app.auth.services.lagoon_service import (
     user_has_any_permission,
     user_has_permission,
 )
+from app.core.lagoon_aliases import normalize_lagoon_id
 from app.db.session import SessionLocal, get_db
 from app.models.role import ProductType
 from app.core.logging import get_logger
@@ -142,7 +143,7 @@ def require_permission(
             query_value = request.query_params.get(lagoon_id_param)
             candidate = path_value or query_value
             if isinstance(candidate, str) and candidate.strip():
-                lagoon_id = candidate.strip()
+                lagoon_id = normalize_lagoon_id(candidate)
 
         if lagoon_id:
             allowed = user_has_permission(
@@ -284,6 +285,8 @@ def ensure_websocket_permission(
     if permission not in VALID_PERMISSIONS:
         raise ValueError(f"Unsupported permission: {permission}")
 
+    requested_lagoon_id = lagoon_id
+    lagoon_id = normalize_lagoon_id(lagoon_id)
     raw_token = extract_websocket_token(websocket, token=token)
 
     try:
@@ -333,10 +336,11 @@ def ensure_websocket_permission(
 
     if not allowed:
         logger.warning(
-            "[RBAC][WS] denied user_id=%s email=%s lagoon_id=%s permission=%s roles=%s permitted_products=%s",
+            "[RBAC][WS] denied user_id=%s email=%s lagoon_id=%s requested_lagoon_id=%s permission=%s roles=%s permitted_products=%s",
             user_id,
             email,
             lagoon_id,
+            requested_lagoon_id,
             permission,
             sorted(set(user_roles)),
             permitted_products,
@@ -347,10 +351,11 @@ def ensure_websocket_permission(
         )
 
     logger.info(
-        "[RBAC][WS] user_scope_resolved user_id=%s email=%s lagoon_id=%s lagoon_product=%s permission=%s mode=%s roles=%s permitted_products=%s",
+        "[RBAC][WS] user_scope_resolved user_id=%s email=%s lagoon_id=%s requested_lagoon_id=%s lagoon_product=%s permission=%s mode=%s roles=%s permitted_products=%s",
         user_id,
         email,
         lagoon_id,
+        requested_lagoon_id,
         lagoon_product,
         permission,
         access_mode,

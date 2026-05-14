@@ -10,6 +10,7 @@ from app.alarms.thresholds.schemas import (
     ThresholdConfigRequest,
     ThresholdViewRowOut,
 )
+from app.core.lagoon_aliases import normalize_lagoon_id
 from app.core.logging import get_logger
 
 logger = get_logger("alarms.thresholds.service")
@@ -23,9 +24,10 @@ class AlarmThresholdService:
         db: Session,
         lagoon_id: str,
     ) -> list[ThresholdViewRowOut]:
+        canonical_lagoon_id = normalize_lagoon_id(lagoon_id)
         rows = AlarmThresholdRepository.get_threshold_rows_view(
             db=db,
-            lagoon_id=lagoon_id,
+            lagoon_id=canonical_lagoon_id,
         )
         return [ThresholdViewRowOut(**row) for row in rows]
 
@@ -35,6 +37,7 @@ class AlarmThresholdService:
         lagoon_id: str,
         payload: ThresholdConfigRequest,
     ) -> tuple[list[str], list[str]]:
+        canonical_lagoon_id = normalize_lagoon_id(lagoon_id)
         created_codes: list[str] = []
         updated_codes: list[str] = []
 
@@ -44,7 +47,7 @@ class AlarmThresholdService:
             if item.max_value is not None:
                 status, code = AlarmThresholdService._upsert_one(
                     db=db,
-                    lagoon_id=lagoon_id,
+                    lagoon_id=canonical_lagoon_id,
                     tag_id=tag_id,
                     side="max",
                     limit_value=float(item.max_value),
@@ -59,7 +62,7 @@ class AlarmThresholdService:
             if item.min_value is not None:
                 status, code = AlarmThresholdService._upsert_one(
                     db=db,
-                    lagoon_id=lagoon_id,
+                    lagoon_id=canonical_lagoon_id,
                     tag_id=tag_id,
                     side="min",
                     limit_value=float(item.min_value),

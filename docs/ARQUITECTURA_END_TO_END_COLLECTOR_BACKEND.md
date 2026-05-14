@@ -1,62 +1,35 @@
-﻿# Arquitectura End-to-End (Collector -> Backend -> Frontend SCADA)
+# Arquitectura End-to-End (Collector -> Backend -> Frontend SCADA)
 
-**Version doc:** 1.3.0
-**Actualizado:** 2026-04-24
+**Version doc:** 2.0.0  
+**Actualizado:** 2026-04-27  
 **Audiencia:** backend, frontend, integracion SCADA y soporte
 
----
-
-## 1) Objetivo
+## 1. Objetivo
 
 Explicar el flujo completo desde PLC/collector hasta la UI SCADA:
 
-- ingest realtime,
-- persistencia historica,
-- alarmas,
-- WebSocket,
-- layouts reutilizables,
-- mappings por laguna,
+- ingest realtime;
+- persistencia historica;
+- alarmas;
+- WebSocket;
+- escenas visuales locales;
 - estados SVG y tarjetas KPI.
 
----
-
-## 2) Repos y responsabilidades
+## 2. Repos y Responsabilidades
 
 ### Collector
 
-Responsable de:
-
-- conectarse a PLCs,
-- leer tags por ciclo,
-- normalizar payload,
-- enviar `POST /ingest/scada`,
-- mantener spool local si falla backend.
+Responsable de conectarse a PLCs, leer tags por ciclo, enviar `POST /ingest/scada` y mantener spool local si falla backend.
 
 ### Backend
 
-Responsable de:
-
-- autenticar ingest con API key,
-- persistir historico y eventos,
-- evaluar alarmas,
-- exponer REST y WS,
-- resolver layouts/mappings SCADA,
-- exponer tags habilitados por collector.
+Responsable de autenticar ingest, persistir historico/eventos, evaluar alarmas, exponer REST/WS, resolver permisos y enviar notificaciones.
 
 ### Frontend
 
-Responsable de:
+Responsable de autenticar usuario, aplicar RBAC de UI, cargar escena local por laguna, mezclar escena + realtime y renderizar SVG, KPIs, labels, estados, historico y alarmas.
 
-- autenticar usuario,
-- aplicar RBAC de UI,
-- cargar layout y mapping,
-- mezclar layout + mapping + realtime,
-- renderizar SVG, tarjetas KPI, labels y estados de bombas/valvulas,
-- mostrar historico.
-
----
-
-## 3) Flujo alto nivel
+## 3. Flujo Alto Nivel
 
 ```text
 PLC
@@ -67,25 +40,22 @@ PLC
       -> alarm_event / notifications
       -> RealtimeStateStore
       -> WS tick
-      -> layouts + lagoon_layout_mapping
   -> Frontend
-      -> GET /api/{product}/lagoons
-      -> GET /lagoons/{lagoon_id}/mapping
-      -> GET /layouts/{layout_id}
+      -> GET /api/lagoons
+      -> src/assets/positions/{lagoon_id}.json
       -> WS /ws/scada/{lagoon_id}
+      -> GET /api/scada/{lagoon_id}/history
       -> SVG + overlays
 ```
 
----
-
-## 4) Ingest collector -> backend
+## 4. Ingest Collector -> Backend
 
 Payload:
 
 ```json
 {
   "lagoon_id": "costa_del_lago",
-  "timestamp": "2026-04-09T18:20:00+00:00",
+  "timestamp": "2026-04-27T18:20:00+00:00",
   "tags": {
     "PT117_R_SCADA": 2.31,
     "P006_STS_SCADA": 1
@@ -95,60 +65,59 @@ Payload:
 
 Header:
 
-- `x-api-key: <COLLECTOR_API_KEY>`
+- `X-Api-Key: <COLLECTOR_API_KEY>`
 
 Backend:
 
-1. valida API key.
-2. persiste en `scada_event` y `scada_minute`.
-3. evalua alarmas.
-4. actualiza estado realtime.
-5. emite WebSocket `tick`.
+1. valida API key;
+2. sincroniza tags/alarms si existe la funcion SQL opcional;
+3. persiste en `scada_event` y `scada_minute`;
+4. evalua alarmas;
+5. actualiza estado realtime;
+6. emite WebSocket `tick`.
 
----
+## 5. Escena SCADA Local
 
-## 5) Layout SCADA reutilizable
+La UI no depende de endpoints de layout. El sistema separa:
 
-La UI no debe duplicar SVGs por laguna. El sistema separa:
-
-1. `layouts.json_definition`: estructura visual y posiciones.
-2. `lagoon_layout_mapping.mapping_json`: tags/labels/svg_target por laguna.
-3. `collector_tag_registry`: tags realmente habilitados por collector.
+1. SVG React en `src/svg/layout*.tsx`.
+2. Registro en `src/scada/svgRegistry.ts`.
+3. Escena por laguna en `src/assets/positions/*.json`.
 4. WebSocket `tags`: valores realtime.
 
-Ejemplo `layout`:
+Ejemplo:
 
 ```json
 {
-  "id": "pressure_1",
-  "type": "kpi",
-  "fallback_tag": "PT117_R_SCADA",
-  "unit": "bar",
-  "position": { "x": 0.213, "y": 0.403 }
-}
-```
-
-Ejemplo `mapping_json`:
-
-```json
-{
-  "pressure_1": {
-    "tag": "PT117_R_SCADA",
-    "label": "PT_117"
-  }
+  "lagoon_id": "ary",
+  "layout_id": "layout2",
+  "svg_component": "layout2",
+  "kpis": [
+    {
+      "tag": "PT117_R",
+      "label": "PT_117",
+      "position": { "top": "29%", "left": "37.4%" }
+    }
+  ],
+  "pumps": [
+    {
+      "tag": "P005_ST",
+      "label": "Bomba Filtro",
+      "svg_target": "circle26-4",
+      "panel": "pump-status"
+    }
+  ]
 }
 ```
 
 Reglas:
 
-- si `mapping_json[element_id].tag` existe, gana sobre `fallback_tag`.
-- si `mapping_json[element_id].label` existe, gana sobre `default_label`.
-- `collector_tags` filtra tarjetas no disponibles para esa laguna.
-- `always_visible=true` permite tarjetas como `RETRO_SCADA` aunque no haya tag realtime.
+- `tag` debe coincidir con el nombre enviado por collector.
+- `svg_target` debe existir como ID dentro del SVG.
+- `panel: "pump-status"` hace que la bomba aparezca en el panel de eventos.
+- `always_visible=true` permite mostrar elementos aunque no haya dato realtime.
 
----
-
-## 6) Estados de bombas y valvulas
+## 6. Estados de Bombas y Valvulas
 
 Los estados discretos son:
 
@@ -160,23 +129,11 @@ Los estados discretos son:
 
 Backend no pinta el SVG. El frontend aplica el color sobre los nodos por `svg_target`.
 
-Configuracion frontend:
-
-- `src/scada/equipment-state/layouts/layout1.equipment.json`
-- `src/scada/equipment-state/layouts/layout2.equipment.json`
-- `src/scada/equipment-state/layouts/layout3.equipment.json`
-
-Entradas con `tag` son dinamicas; entradas con `state` son fijas.
-
----
-
-## 7) Historico
+## 7. Historico
 
 Backend:
 
-- `GET /scada/history/{resolution}`
-- `GET /api/crystal/history`
-- `GET /api/small/history`
+- `GET /scada/{lagoon_id}/history`
 
 Resolucion:
 
@@ -184,107 +141,64 @@ Resolucion:
 - `daily`
 - `weekly`
 
-Respuesta:
-
-```json
-{
-  "lagoon_id": "costa_del_lago",
-  "resolution": "hourly",
-  "source": "table",
-  "series": [
-    {
-      "tag": "PT117_R_SCADA",
-      "points": [
-        { "timestamp": "2026-04-09T12:00:00Z", "value": 2.34 }
-      ]
-    }
-  ]
-}
-```
-
-Frontend:
-
-- acepta `tag`, `tag_key` o `name`, para compatibilidad.
-- muestra selector multi TAG.
-- filtra tags de estado, `RETRO` y totalizadores `WM`.
-
----
-
-## 8) Modo desconectado
+## 8. Modo Desconectado
 
 Si la laguna no tiene conexion realtime:
 
-- el frontend espera hasta 7 segundos por tags realtime,
-- luego muestra el mapa igualmente,
-- muestra tarjetas con `--`,
-- mantiene nombres y posiciones desde BD.
+- el frontend espera hasta 7 segundos por tags realtime;
+- luego muestra el mapa igualmente;
+- muestra tarjetas con `--`;
+- mantiene nombres y posiciones desde el JSON local.
 
-Esto permite ver `central_district_dubai` y otras lagunas offline sin depender del collector activo.
-
----
-
-## 9) Donde tocar codigo
-
-Backend layout:
-
-- `app/layout_config/service.py`
-- `app/layout_config/repository.py`
-- `app/routers/scada_layouts.py`
-- `app/routers/crystal/lagoons.py`
-- `app/routers/small/lagoons.py`
-- `app/models/layout.py`
-- `app/models/lagoon_layout_mapping.py`
-
-Frontend layout:
-
-- `src/hooks/useScadaLayoutScene.ts`
-- `src/api/scadaLayoutsApi.ts`
-- `src/scada/layoutSceneResolver.ts`
-- `src/components/lagoon/ScadaMapPanel.tsx`
-- `src/containers/ScadaOverlay.tsx`
-- `src/containers/ScadaEquipmentStateOverlay.tsx`
-- `src/scada/equipment-state/layouts/*.equipment.json`
-- `src/scada/labels/layouts/*.base.json`
-
-Alarmas:
-
-- `app/alarms/*`
-- `app/alarms/thresholds/*`
-- `src/components/AlarmManagerModal.tsx`
-- `src/hooks/useAlarmThresholds.ts`
-
----
-
-## 10) Validacion recomendada
+## 9. Donde Tocar Codigo
 
 Backend:
 
-```bash
+- `app/routers/ingest.py`
+- `app/routers/scada.py`
+- `app/routers/events.py`
+- `app/routers/websocket.py`
+- `app/auth/services/lagoon_service.py`
+- `app/alarms/*`
+- `app/alarms/thresholds/*`
+
+Frontend layout/escena:
+
+- `src/assets/positions/*.json`
+- `src/hooks/useScadaLayoutScene.ts`
+- `src/scada/lagoonSceneBundle.ts`
+- `src/components/lagoon/ScadaMapPanel.tsx`
+- `src/containers/ScadaOverlay.tsx`
+- `src/containers/ScadaEquipmentStateOverlay.tsx`
+- `src/scada/svgRegistry.ts`
+
+Collector:
+
+- `collector_python/collectors.yml`
+- `collector_python/config/*.yml`
+
+## 10. Validacion Recomendada
+
+Backend:
+
+```powershell
 python -m pytest -q
 ```
 
 Frontend:
 
-```bash
+```powershell
 npm run build
 ```
 
----
+Collector:
 
-## 11) Alta de una nueva laguna
+```powershell
+python main.py --config collectors.yml
+```
+
+## 11. Alta de una Nueva Laguna
 
 La guia operativa actualizada vive en:
 
-- [FLUJO_INSERCION.md](./FLUJO_INSERCION.md#11-alta-de-una-nueva-planta-o-laguna)
-
-Resumen corto del proceso:
-
-1. crear la laguna en `lagoons`;
-2. reutilizar o crear el layout en `layouts`;
-3. cargar `mapping_json` por API (`PUT /api/{product}/lagoons/{lagoon_id}/layout-config`) o por SQL;
-4. registrar tags en `collector_tag_registry`;
-5. verificar permisos en `vw_user_lagoons`;
-6. reiniciar backend si hubo alta o cambio directo de metadata base;
-7. probar `POST /ingest/scada`, `GET /api/{product}/lagoons`, `GET /api/{product}/lagoons/{lagoon_id}/layout-config` y `WS /ws/scada/{lagoon_id}`.
-
-La decision de dejar el detalle en un solo documento evita que la arquitectura y la guia operativa se desalineen.
+- [FLUJO_INSERCION.md](./FLUJO_INSERCION.md#10-alta-de-una-nueva-planta-o-laguna)

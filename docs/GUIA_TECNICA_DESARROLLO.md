@@ -1,21 +1,19 @@
-﻿# Guia Tecnica de Desarrollo - Crystal Lagoons Backend
+# Guia Tecnica de Desarrollo - Crystal Lagoons Backend
 
-**Ultima actualizacion:** 2026-04-09
+**Ultima actualizacion:** 2026-04-27  
 **Publico:** Desarrolladores Python/FastAPI
 
----
-
-## 1) Setup rapido
+## 1. Setup Rapido
 
 Requisitos:
 
 - Python 3.10+
-- PostgreSQL 14+
+- PostgreSQL
 - pip
 
 Instalacion:
 
-```bash
+```powershell
 cd crystal-backend
 python -m venv .venv
 .venv\Scripts\activate
@@ -35,23 +33,20 @@ JWT_ACCESS_TOKEN_EXPIRE_MINUTES=1080
 Variables utiles:
 
 ```env
-INGEST_TIMEOUT_SEC=125
-SCADA_LAYOUT_CACHE_TTL_SEC=300
-LAYOUT_CONFIG_CACHE_TTL_SEC=300
+INGEST_REQUEST_TIMEOUT_SEC=125
+SCADA_RUNTIME_PLC_OFFLINE_TIMEOUT_SEC=30
 ```
 
----
+## 2. Ejecutar Aplicacion
 
-## 2) Ejecutar aplicacion
-
-```bash
-python -m uvicorn app.main:app --reload
+```powershell
+python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8090
 ```
 
 Health check:
 
-```bash
-curl http://localhost:8000/health
+```powershell
+curl http://localhost:8090/health
 ```
 
 Respuesta esperada:
@@ -60,157 +55,129 @@ Respuesta esperada:
 {"status":"ok"}
 ```
 
----
-
-## 3) Estructura de codigo
+## 3. Estructura de Codigo
 
 ```text
 app/
   main.py                         # bootstrap, routers, lifespan
   routers/
+    health.py                     # /health
     ingest.py                     # POST /ingest/scada
-    scada_layouts.py              # /layouts + /lagoons/{id}/mapping
-    crystal/lagoons.py            # endpoints producto Crystal
-    small/lagoons.py              # endpoints producto Small
-  layout_config/
-    repository.py                 # DB layouts/mapping/collector_tags
-    schemas.py                    # Pydantic contracts
-    service.py                    # cache, validacion, update
+    scada.py                      # /scada/{lagoon_id}/realtime|history|kpis
+    events.py                     # /scada/{lagoon_id}/events|pump-events
+    websocket.py                  # /ws/scada/{lagoon_id}
+    alarm_thresholds.py           # /alarms/{lagoon_id}/thresholds/pt-fit
+    email.py                      # /email/test-alert
+    small/control.py              # /api/small/control
+    small/chemicals.py            # /api/small/chemicals
+  auth/
+    auth.py                       # /auth/login
+    routers/lagoons_router.py     # /lagoons, /control/pump
+    services/lagoon_service.py    # permisos por producto/laguna
   models/
-    layout.py                     # tabla layouts
-    lagoon_layout_mapping.py      # tabla lagoon_layout_mapping
     lagoon.py                     # tabla lagoons
-  scada/
-    layout_resolver.py            # normalizacion layout_id
-    history/repo.py               # historico view/fallback
+    role.py, user.py, user_role.py
+    scada_minute.py, scada_event.py
   services/
-    ingest_service.py             # persistencia SCADA
+    ingest_service.py
+    scada_query_service.py
+    scada_event_service.py
+    email_service.py
   state/store.py                  # realtime state
-  ws/routes.py                    # websocket
   alarms/                         # motor alarmas
 ```
 
----
+## 4. Probar Flujo Basico
 
-## 4) Probar layout SCADA
+Login:
 
-Obtener layout:
+```powershell
+curl -X POST "http://localhost:8090/auth/login" `
+  -H "Content-Type: application/json" `
+  -d '{"email":"user@domain.com","password":"secret"}'
+```
 
-```bash
-curl "http://localhost:8000/layouts/layout1" \
+Lagunas:
+
+```powershell
+curl "http://localhost:8090/lagoons" -H "Authorization: Bearer $TOKEN"
+```
+
+Historico:
+
+```powershell
+curl "http://localhost:8090/scada/costa_del_lago/history?start_date=2026-04-27T00:00:00Z&end_date=2026-04-27T23:59:59Z&resolution=hourly" `
   -H "Authorization: Bearer $TOKEN"
 ```
 
-Obtener mapping de laguna:
+Realtime HTTP:
 
-```bash
-curl "http://localhost:8000/lagoons/costa_del_lago/mapping" \
+```powershell
+curl "http://localhost:8090/scada/costa_del_lago/realtime" `
   -H "Authorization: Bearer $TOKEN"
 ```
 
-Obtener configuracion producto:
+WebSocket:
 
-```bash
-curl "http://localhost:8000/api/crystal/lagoons/costa_del_lago/layout-config" \
-  -H "Authorization: Bearer $TOKEN"
+```text
+ws://localhost:8090/ws/scada/costa_del_lago?token=<jwt>
 ```
 
-Actualizar mapping:
+## 5. Ingest
 
-```bash
-curl -X PUT "http://localhost:8000/api/crystal/lagoons/costa_del_lago/layout-config" \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "layout_id": "layout1",
-    "mapping_json": {
-      "pressure_1": { "tag": "PT117_R_SCADA", "label": "PT_117" }
-    }
-  }'
+```powershell
+curl -X POST "http://localhost:8090/ingest/scada" `
+  -H "X-Api-Key: $env:COLLECTOR_API_KEY" `
+  -H "Content-Type: application/json" `
+  -d '{"lagoon_id":"costa_del_lago","tags":{"PT117_R_SCADA":2.31,"P006_STS_SCADA":1}}'
 ```
 
-Notas:
+Resultado esperado:
 
-- El `PUT` requiere permiso de edicion para la laguna.
-- Si una clave de `mapping_json` no existe en `layout.elements[].id`, devuelve `422`.
-- El servicio actualiza `lagoons.scada_layout` con el `layout_id` enviado.
+- `scada_minute` actualizado;
+- `scada_event` si hubo cambios de estado;
+- alarmas evaluadas;
+- tick WebSocket emitido.
 
----
-
-## 5) Historico
-
-```bash
-curl "http://localhost:8000/api/crystal/history?lagoon_id=costa_del_lago&start_date=2026-04-09T00:00:00Z&end_date=2026-04-09T23:59:59Z&resolution=hourly" \
-  -H "Authorization: Bearer $TOKEN"
-```
-
-Respuesta esperada:
-
-```json
-{
-  "lagoon_id": "costa_del_lago",
-  "resolution": "hourly",
-  "source": "table",
-  "series": [
-    {
-      "tag": "PT117_R_SCADA",
-      "points": [
-        { "timestamp": "2026-04-09T12:00:00Z", "value": 2.34 }
-      ]
-    }
-  ]
-}
-```
-
----
-
-## 6) Testing
+## 6. Testing
 
 Ejecutar suite completa:
 
-```bash
+```powershell
 python -m pytest -q
 ```
 
-Tests relevantes para layouts:
+Tests relevantes:
 
-- `tests/test_scada_layouts.py`
+- `tests/test_health_endpoints.py`
+- `tests/test_ingest_minute_persistence.py`
+- `tests/test_websocket_security.py`
+- `tests/test_auth_service.py`
+- `tests/test_alarm_thresholds_endpoints.py`
+- `tests/test_email_service.py`
 
-Smoke recomendado:
+## 7. Troubleshooting Rapido
 
-1. `GET /health`.
-2. login valido.
-3. `GET /layouts/layout1`.
-4. `GET /lagoons/{id}/mapping`.
-5. `GET /api/{product}/lagoons/{id}/layout-config`.
-6. `GET /api/{product}/history`.
-7. WebSocket `/ws/scada/{id}`.
+### Backend no arranca por seguridad
 
----
+- Revisar `JWT_SECRET_KEY`.
+- Revisar `COLLECTOR_API_KEY`.
+- Evitar secretos por defecto en entornos no dev.
 
-## 7) Troubleshooting rapido
+### Laguna no aparece
 
-### Backend no arranca por `Lagoon is not defined`
-
-- Revisar import `from app.models.lagoon import Lagoon` en `app/main.py`.
-
-### Mapping no muestra tarjetas
-
-- Revisar `collector_tag_registry` para la laguna.
-- Si el tag no esta habilitado por collector, el frontend lo oculta.
-- Para elementos que siempre deben verse, usar `always_visible=true` en el layout.
-
-### `PUT layout-config` devuelve 422
-
-- Alguna clave del mapping no existe en `layout.json_definition.elements[].id`.
+- Revisar `lagoons.enable`.
+- Revisar `product_type`.
+- Revisar `vw_user_lagoons` o rol por producto.
 
 ### Historico muestra series vacias
 
 - Revisar rango de fechas.
-- Revisar si hay datos en `scada_minute`.
-- Recordar que frontend filtra tags de estado, WM y RETRO para graficos.
+- Revisar datos en `scada_minute`.
+- Revisar si la vista agregada existe o si aplica fallback.
 
-### Valores realtime `--`
+### Valores realtime `--` en frontend
 
-- Puede no haber WebSocket o tag no presente en `tags`.
-- El mapa se muestra igualmente despues de 7 segundos para lagunas desconectadas.
+- Revisar WebSocket.
+- Revisar que el collector envie los tags usados por `src/assets/positions/{lagoon_id}.json`.
+- Revisar `RealtimeStateStore` en `/health/ready`.

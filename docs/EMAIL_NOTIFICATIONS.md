@@ -1,5 +1,7 @@
 # Notificaciones Email
 
+**Actualizado:** 2026-04-27
+
 Documento de referencia para el flujo SMTP actual del backend.
 
 ## Arquitectura actual

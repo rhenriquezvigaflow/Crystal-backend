@@ -1,26 +1,23 @@
-﻿# Guia de Onboarding - Crystal Lagoons Backend
+# Guia de Onboarding - Crystal Lagoons Backend
 
-**Ultima actualizacion:** 2026-04-09
-**Tiempo estimado:** 3-5 horas
-
----
+**Ultima actualizacion:** 2026-04-27  
+**Tiempo estimado:** 2-4 horas
 
 ## Objetivo
 
 Al finalizar deberias poder:
 
-- levantar el backend local,
-- autenticarte y consumir endpoints protegidos,
-- enviar ingest con API key,
-- leer historico y realtime,
-- entender el sistema de layouts SCADA reutilizables,
-- ubicar donde hacer cambios de alarmas, mappings y estados SCADA.
+- levantar el backend local;
+- autenticarte y consumir endpoints protegidos;
+- enviar ingest con API key;
+- leer historico y realtime;
+- entender permisos por laguna;
+- ubicar cambios de alarmas, email y WebSocket;
+- coordinar alta de lagunas con collector y frontend.
 
----
+## Ruta Sugerida
 
-## Ruta sugerida
-
-### Bloque 1 - Entender el sistema
+### Bloque 1 - Entender el Sistema
 
 Lee en este orden:
 
@@ -30,21 +27,19 @@ Lee en este orden:
 
 Checklist:
 
-- sabes para que sirve `POST /ingest/scada`.
-- entiendes diferencia entre realtime WS e historico REST.
-- entiendes que `layouts` define estructura y `lagoon_layout_mapping` define tags/labels por laguna.
-- sabes que `collector_tags` decide que tarjetas se muestran.
+- sabes para que sirve `POST /ingest/scada`;
+- entiendes diferencia entre realtime WS e historico REST;
+- sabes que el layout visual vive en frontend;
+- entiendes `lagoons`, `roles` y `vw_user_lagoons`.
 
----
+### Bloque 2 - Setup Local
 
-### Bloque 2 - Setup local
-
-```bash
+```powershell
 cd crystal-backend
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
-python -m uvicorn app.main:app --reload
+python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8090
 ```
 
 `.env` minimo:
@@ -57,76 +52,60 @@ JWT_SECRET_KEY=replace-me
 
 Verificacion:
 
-```bash
-curl http://localhost:8000/health
+```powershell
+curl http://localhost:8090/health
 ```
 
----
-
-### Bloque 3 - Probar flujo extremo a extremo
+### Bloque 3 - Probar Flujo Extremo a Extremo
 
 1. Login y guardar token.
 2. Consultar lagunas:
 
-```bash
-curl "http://localhost:8000/api/crystal/lagoons" \
+```powershell
+curl "http://localhost:8090/lagoons" `
   -H "Authorization: Bearer $TOKEN"
 ```
 
-3. Consultar layout/mapping:
+3. Probar historico:
 
-```bash
-curl "http://localhost:8000/lagoons/costa_del_lago/mapping" \
-  -H "Authorization: Bearer $TOKEN"
-
-curl "http://localhost:8000/layouts/layout1" \
+```powershell
+curl "http://localhost:8090/scada/costa_del_lago/history?start_date=2026-04-27T00:00:00Z&end_date=2026-04-27T23:59:59Z&resolution=hourly" `
   -H "Authorization: Bearer $TOKEN"
 ```
 
-4. Probar historico:
-
-```bash
-curl "http://localhost:8000/api/crystal/history?lagoon_id=costa_del_lago&start_date=2026-04-09T00:00:00Z&end_date=2026-04-09T23:59:59Z&resolution=hourly" \
-  -H "Authorization: Bearer $TOKEN"
-```
-
-5. Conectar WebSocket:
+4. Conectar WebSocket:
 
 ```text
-ws://localhost:8000/ws/scada/costa_del_lago?token=<jwt>
+ws://localhost:8090/ws/scada/costa_del_lago?token=<jwt>
 ```
 
----
+5. Probar ingest con API key.
 
-## Mapa rapido de archivos
+## Mapa Rapido de Archivos
 
 Backend:
 
 - `app/main.py`: bootstrap.
 - `app/routers/ingest.py`: ingest.
-- `app/layout_config/service.py`: cache y validacion layout/mapping.
-- `app/routers/scada_layouts.py`: endpoints generales de layout.
-- `app/routers/crystal/lagoons.py`: layout-config Crystal.
-- `app/routers/small/lagoons.py`: layout-config Small.
-- `app/scada/history/repo.py`: historico.
+- `app/routers/scada.py`: historico, realtime HTTP y KPIs.
+- `app/routers/events.py`: eventos y reportes.
+- `app/routers/websocket.py`: realtime WS.
+- `app/auth/services/lagoon_service.py`: permisos por laguna.
 - `app/alarms/thresholds/service.py`: umbrales PT/FIT.
+- `app/services/email_service.py`: email.
 
 Frontend relacionado:
 
-- `src/hooks/useScadaLayoutScene.ts`.
-- `src/scada/layoutSceneResolver.ts`.
-- `src/containers/ScadaOverlay.tsx`.
-- `src/containers/ScadaEquipmentStateOverlay.tsx`.
-- `src/scada/equipment-state/layouts/*.equipment.json`.
-- `src/scada/labels/layouts/*.base.json`.
+- `crystal-frontend/src/assets/positions/*.json`: escenas visuales.
+- `crystal-frontend/src/hooks/useScadaLayoutScene.ts`.
+- `crystal-frontend/src/scada/lagoonSceneBundle.ts`.
+- `crystal-frontend/src/scada/svgRegistry.ts`.
 
----
+## Primer Cambio Seguro
 
-## Siguiente paso recomendado
+Para un primer cambio de backend:
 
-Para un primer cambio seguro:
-
-1. agrega o ajusta un elemento en `layouts.json_definition` en BD,
-2. valida que existe en `mapping_json`,
-3. corre `python -m pytest -q`,
-4. valida frontend con `npm run build`.
+1. agrega o ajusta un test enfocado;
+2. modifica solo el router/servicio involucrado;
+3. corre `python -m pytest -q`;
+4. si cambia contrato frontend, actualiza tambien `crystal-frontend/docs/API_CONTRACTS.md`.

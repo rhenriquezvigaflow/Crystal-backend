@@ -6,6 +6,7 @@ from starlette.websockets import WebSocketState
 
 from app.auth.services.lagoon_service import PERMISSION_VIEW, get_lagoon_by_id
 from app.core.config import settings
+from app.core.lagoon_aliases import normalize_lagoon_id
 from app.core.logging import get_logger
 from app.db.session import SessionLocal
 from app.security.rbac import (
@@ -316,6 +317,8 @@ async def _handle_scada_websocket(
     websocket: WebSocket,
     lagoon_id: str,
 ) -> None:
+    requested_lagoon_id = lagoon_id
+    lagoon_id = normalize_lagoon_id(lagoon_id)
     client = _client_label(websocket)
     origin = websocket.headers.get("origin", "-")
     forwarded_for = websocket.headers.get("x-forwarded-for", "-")
@@ -324,10 +327,11 @@ async def _handle_scada_websocket(
     accept_subprotocol = _resolve_accept_subprotocol(websocket)
 
     logger.debug(
-        "[WS HANDSHAKE] path=%s lagoon_id=%s client=%s origin=%s "
+        "[WS HANDSHAKE] path=%s lagoon_id=%s requested_lagoon_id=%s client=%s origin=%s "
         "x_forwarded_for=%s x_forwarded_proto=%s has_token=%s",
         websocket.url.path,
         lagoon_id,
+        requested_lagoon_id,
         client,
         origin,
         forwarded_for,
@@ -335,8 +339,9 @@ async def _handle_scada_websocket(
         has_token,
     )
     logger.debug(
-        "[WS AUTH START] lagoon_id=%s client=%s token_source=%s",
+        "[WS AUTH START] lagoon_id=%s requested_lagoon_id=%s client=%s token_source=%s",
         lagoon_id,
+        requested_lagoon_id,
         client,
         describe_websocket_token_source(websocket),
     )
@@ -346,8 +351,9 @@ async def _handle_scada_websocket(
         None if origin == "-" else origin,
     ):
         logger.warning(
-            "[WS REJECTED] lagoon_id=%s client=%s code=%s reason=Origin not allowed origin=%s",
+            "[WS REJECTED] lagoon_id=%s requested_lagoon_id=%s client=%s code=%s reason=Origin not allowed origin=%s",
             lagoon_id,
+            requested_lagoon_id,
             client,
             status.WS_1008_POLICY_VIOLATION,
             origin,
@@ -368,8 +374,9 @@ async def _handle_scada_websocket(
     except WebSocketException as exc:
         reason = exc.reason or "Forbidden"
         logger.warning(
-            "[WS REJECTED] lagoon_id=%s client=%s code=%s reason=%s",
+            "[WS REJECTED] lagoon_id=%s requested_lagoon_id=%s client=%s code=%s reason=%s",
             lagoon_id,
+            requested_lagoon_id,
             client,
             exc.code,
             reason,
@@ -382,8 +389,9 @@ async def _handle_scada_websocket(
         return
     except Exception:
         logger.exception(
-            "[WS AUTH ERROR] lagoon_id=%s client=%s",
+            "[WS AUTH ERROR] lagoon_id=%s requested_lagoon_id=%s client=%s",
             lagoon_id,
+            requested_lagoon_id,
             client,
         )
         await _safe_close(
@@ -395,8 +403,9 @@ async def _handle_scada_websocket(
 
     if not _is_valid_lagoon_id(lagoon_id):
         logger.warning(
-            "[WS REJECTED] lagoon_id=%s client=%s code=%s reason=Lagoon not found",
+            "[WS REJECTED] lagoon_id=%s requested_lagoon_id=%s client=%s code=%s reason=Lagoon not found",
             lagoon_id,
+            requested_lagoon_id,
             client,
             status.WS_1008_POLICY_VIOLATION,
         )
@@ -409,8 +418,9 @@ async def _handle_scada_websocket(
 
     user_id = str(user.get("sub", "unknown"))
     logger.debug(
-        "[WS AUTHORIZED] lagoon_id=%s user_id=%s client=%s",
+        "[WS AUTHORIZED] lagoon_id=%s requested_lagoon_id=%s user_id=%s client=%s",
         lagoon_id,
+        requested_lagoon_id,
         user_id,
         client,
     )

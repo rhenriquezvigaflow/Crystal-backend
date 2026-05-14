@@ -1,16 +1,14 @@
 # Diagramas de Flujos - Crystal Lagoons Backend
 
-**Ultima actualizacion:** 2026-03-13
-**Version:** 1.2
+**Ultima actualizacion:** 2026-04-27  
+**Version:** 2.0
 
----
-
-## 1) Arquitectura general
+## 1. Arquitectura General
 
 ```text
                 +-------------------------+
 Collector ----> | POST /ingest/scada      |
-(x-api-key)     | (FastAPI)               |
+(X-Api-Key)     | FastAPI                 |
                 +-----------+-------------+
                             |
                             v
@@ -24,77 +22,63 @@ Collector ----> | POST /ingest/scada      |
                        PostgreSQL
 
 User UI ----> POST /auth/login ----> JWT
-User UI ----> GET /scada/*, /api/* (Bearer)
-User UI ----> WS /ws/* (token + can_view)
+User UI ----> GET /lagoons, /scada/*, /alarms/* (Bearer)
+User UI ----> WS /ws/scada/{lagoon_id} (token + can_view)
 ```
 
----
-
-## 2) Flujo de ingest
+## 2. Flujo de Ingest
 
 ```text
 POST /ingest/scada
   |
-  +--> validar x-api-key
+  +--> validar X-Api-Key
   +--> parse timestamp UTC
+  +--> sync opcional sp_sync_collector_tags_and_alarms
   +--> persistir en thread (timeout)
         |
         +--> detectar cambios de estado
-        +--> cerrar evento abierto (si existe)
+        +--> cerrar evento abierto si existe
         +--> crear nuevo evento STATE_CHANGE
-        +--> upsert scada_minute en buckets cerrados
+        +--> upsert scada_minute
+  +--> evaluar alarmas
+  +--> commit
+  +--> despachar notificaciones post-commit
   +--> actualizar RealtimeStateStore
   +--> broadcast websocket por laguna
   '--> 200 {"ok": true}
 ```
 
----
-
-## 3) Flujo websocket
+## 3. Flujo WebSocket
 
 ```text
-Cliente WS conecta con lagoon_id + token
+Cliente WS conecta a /ws/scada/{lagoon_id}
   |
   +--> validar JWT
-  +--> validar permiso can_view en vw_user_lagoons
+  +--> validar permiso can_view o alcance por producto
   +--> aceptar conexion
   +--> enviar snapshot inicial
   '--> mantener conexion y enviar tick en cada ingest
 ```
 
-Endpoints:
+Endpoint:
 
-- `/ws/scada?lagoon_id=<id>&token=<jwt>`
 - `/ws/scada/{lagoon_id}?token=<jwt>`
-- `/ws/crystal/{lagoon_id}?token=<jwt>`
-- `/ws/small/{lagoon_id}?token=<jwt>`
 
----
-
-## 4) Flujo de historial
+## 4. Flujo de Historico
 
 ```text
-GET /scada/history/{resolution}
+GET /scada/{lagoon_id}/history
   |
   +--> resolution: hourly|daily|weekly
   +--> existe vista scada_minute_<resolution> ?
         | yes                     | no
         v                         v
-      query view             time_bucket(scada_minute)
+      query view             fallback scada_minute
       source="view"          source="table"
   '--> respuesta con series por tag
 ```
 
-Producto-specifico:
-
-- `GET /api/crystal/history`
-- `GET /api/small/history`
-
-Si no envias `resolution`, el backend la elige por rango de fechas.
-
----
-
-## 5) Startup lifecycle
+## 5. Startup Lifecycle
 
 ```text
 App start
@@ -102,22 +86,22 @@ App start
   +--> crear RealtimeStateStore
   +--> crear WebSocketManager
   +--> cargar timezones desde lagoons
-  +--> precargar pump_last_on desde vw_scada_last_3_pump_actions
+  +--> precargar pump_last_on desde scada_event
   +--> iniciar ScadaStallWatchdog
+  +--> iniciar AlarmLagoonSignalMonitor
   '--> listo para trafico
 
 App stop
+  +--> detener AlarmLagoonSignalMonitor
   '--> detener ScadaStallWatchdog
 ```
 
----
-
-## 6) Seguridad resumida
+## 6. Seguridad Resumida
 
 ```text
-Ingest: x-api-key
+Ingest: X-Api-Key
 REST protegido: Bearer JWT + roles/permisos
-WS: token (query/header) + can_view por laguna
+WS: token + can_view por laguna
 ```
 
 Roles:
@@ -125,7 +109,7 @@ Roles:
 - AdminCrystal
 - VisualCrystal
 - AdminSmall
-- VisualSmall
+- SuperAdmin
 
 Permisos:
 
