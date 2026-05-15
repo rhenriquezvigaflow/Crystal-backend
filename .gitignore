@@ -1,8 +1,13 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.coverage
+htmlcov/
 .venv/
+build/
+dist/
 logs/
+*.log
 .env
 .env.*
 !.env.example
