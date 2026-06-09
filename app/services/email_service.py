@@ -117,6 +117,38 @@ class EmailService:
     ) -> None:
         asyncio.run(self.send_alarm_notification(payload))
 
+    async def send_auth_2fa_code(
+        self,
+        *,
+        recipient: str,
+        code: str,
+        expires_minutes: int,
+    ) -> None:
+        await self.send_email(
+            recipients=[recipient],
+            subject="Small Lagoons authentication code",
+            template_name="auth_2fa_code.html",
+            context={
+                "code": code,
+                "expires_minutes": expires_minutes,
+            },
+        )
+
+    def send_auth_2fa_code_sync(
+        self,
+        *,
+        recipient: str,
+        code: str,
+        expires_minutes: int,
+    ) -> None:
+        asyncio.run(
+            self.send_auth_2fa_code(
+                recipient=recipient,
+                code=code,
+                expires_minutes=expires_minutes,
+            )
+        )
+
     def _get_mail_client(self) -> FastMail:
         if self._mail_client is None:
             self._mail_client = FastMail(self._build_connection_config())

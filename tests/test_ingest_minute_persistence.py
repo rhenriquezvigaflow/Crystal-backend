@@ -76,6 +76,41 @@ def test_ingest_persists_scada_minute_only_when_minute_rolls(monkeypatch):
     assert persisted_by_tag["FIT001"]["value_num"] == 2.5
 
 
+def test_ingest_persists_state_tag_float_value_in_state_column(monkeypatch):
+    fake_db = _FakeDb()
+
+    monkeypatch.setattr(ingest_service, "insert", lambda model: _FakeInsert(model))
+
+    ingest_service.reset_runtime_state("test_filtracion_state_tag")
+
+    ingest_service.ingest(
+        lagoon_id="kirah",
+        ts=datetime(2026, 4, 16, 12, 0, 1, tzinfo=timezone.utc),
+        tags={"FILTRACION.ST": 10.0},
+        db=fake_db,
+    )
+
+    _, summary = ingest_service.ingest(
+        lagoon_id="kirah",
+        ts=datetime(2026, 4, 16, 12, 1, 0, tzinfo=timezone.utc),
+        tags={"FILTRACION.ST": "10"},
+        db=fake_db,
+    )
+
+    assert summary.minute_rows == 1
+    persisted_rows = fake_db.executed[0].rows
+    assert persisted_rows == [
+        {
+            "lagoon_id": "kirah",
+            "tag_id": "FILTRACION.ST",
+            "bucket": datetime(2026, 4, 16, 12, 0, 0, tzinfo=timezone.utc),
+            "state": 10,
+            "value_num": None,
+            "value_bool": None,
+        }
+    ]
+
+
 def test_get_current_prefers_realtime_state_store():
     state_store = RealtimeStateStore()
     asyncio.run(

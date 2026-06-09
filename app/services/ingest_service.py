@@ -12,7 +12,13 @@ from app.core.config import settings
 from app.core.logging import get_logger
 from app.models.scada_event import ScadaEvent
 from app.models.scada_minute import ScadaMinute
-from app.scada.value_codec import is_state_or_bool_value, to_storage_fields
+from app.scada.value_codec import (
+    TAG_STATE_MAX_VALUE,
+    coerce_state_value,
+    is_state_or_bool_value,
+    is_state_tag_id,
+    to_storage_fields,
+)
 
 _lock = Lock()
 
@@ -160,23 +166,28 @@ def ingest(
 
     with _lock:
         for tag_id, value in tags.items():
-            if not is_state_or_bool_value(value):
+            if not is_state_or_bool_value(value, tag_id):
                 continue
 
+            state_value = (
+                coerce_state_value(value, max_state=TAG_STATE_MAX_VALUE)
+                if is_state_tag_id(tag_id)
+                else value
+            )
             state_key = (lagoon_id, tag_id)
             previous = _last_state.get(state_key)
 
             if previous is None:
-                _last_state[state_key] = value
+                _last_state[state_key] = state_value
                 continue
 
-            if previous == value:
+            if previous == state_value:
                 continue
 
-            detected_events.append((tag_id, previous, value))
-            _last_state[state_key] = value
+            detected_events.append((tag_id, previous, state_value))
+            _last_state[state_key] = state_value
 
-            if not _to_running_state(previous) and _to_running_state(value):
+            if not _to_running_state(previous) and _to_running_state(state_value):
                 pump_last_on_updates[tag_id] = ts.isoformat()
 
         current_buffer = _minute_buffers.get(lagoon_id)
@@ -205,7 +216,7 @@ def ingest(
 
     upsert_rows: list[dict[str, Any]] = []
     for tag_id, value in minute_tags_to_persist.items():
-        state, value_num, value_bool = to_storage_fields(value)
+        state, value_num, value_bool = to_storage_fields(value, tag_id=tag_id)
         upsert_rows.append(
             {
                 "lagoon_id": lagoon_id,

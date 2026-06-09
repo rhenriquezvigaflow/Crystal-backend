@@ -4,27 +4,38 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
-from app.auth.jwt import ACCESS_TOKEN_EXPIRE_MINUTES
 from app.alarms.service import _evaluate_lagoon_comm_loss_by_clock
-from app.auth.services.auth_service import build_login_response
+from app.auth.services.auth_service import build_login_response, user_requires_small_2fa
 
 
 def _build_user() -> SimpleNamespace:
     return SimpleNamespace(
         id=123,
         email="operator@example.com",
-        roles=[SimpleNamespace(name="ADMIN")],
+        roles=[SimpleNamespace(name="AdminCrystal", product_type="crystal")],
         role=None,
     )
 
 
-def test_build_login_response_uses_18_hour_expiry():
+def test_build_login_response_uses_24_hour_max_expiry():
     response = build_login_response(_build_user())
 
-    assert ACCESS_TOKEN_EXPIRE_MINUTES == 18 * 60
-    assert response["expires_in"] == 18 * 60 * 60
+    assert response["expires_in"] == 24 * 60 * 60
     assert response["token_type"] == "bearer"
-    assert response["user"]["roles"] == ["ADMIN"]
+    assert response["user"]["roles"] == ["AdminCrystal"]
+    assert response["user"]["product_type"] == "crystal"
+    assert response["user"]["auth_level"] == "password"
+
+
+def test_small_role_requires_2fa():
+    user = SimpleNamespace(
+        id=456,
+        email="small@example.com",
+        roles=[SimpleNamespace(name="AdminSmall", product_type="small")],
+        role=None,
+    )
+
+    assert user_requires_small_2fa(user) is True
 
 
 def test_lagoon_comm_loss_default_timeout_is_6_hours():

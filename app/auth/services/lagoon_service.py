@@ -14,6 +14,7 @@ from app.models.role import ProductType
 ROLE_ADMIN_CRYSTAL = "AdminCrystal"
 ROLE_VISUAL_CRYSTAL = "VisualCrystal"
 ROLE_ADMIN_SMALL = "AdminSmall"
+ROLE_VISUAL_SMALL = "VisualSmall"
 ROLE_SUPERADMIN = "SuperAdmin"
 logger = get_logger("auth.lagoon_scope")
 
@@ -60,7 +61,7 @@ def resolve_permitted_product_types(
     permitted: set[str] = set()
     if ROLE_ADMIN_CRYSTAL.lower() in roles or ROLE_VISUAL_CRYSTAL.lower() in roles:
         permitted.add(ProductType.CRYSTAL.value)
-    if ROLE_ADMIN_SMALL.lower() in roles:
+    if ROLE_ADMIN_SMALL.lower() in roles or ROLE_VISUAL_SMALL.lower() in roles:
         permitted.add(ProductType.SMALL.value)
 
     return permitted

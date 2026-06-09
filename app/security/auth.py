@@ -1,4 +1,12 @@
-from app.auth.auth import LoginRequest, TokenResponse, login, router
+from app.auth.auth import (
+    LoginRequest,
+    TokenResponse,
+    TwoFactorRequiredResponse,
+    Verify2FARequest,
+    login,
+    router,
+    verify_2fa,
+)
 from app.auth.jwt import (
     ACCESS_TOKEN_EXPIRE_MINUTES,
     ALGORITHM,
@@ -15,8 +23,11 @@ __all__ = [
     "router",
     "LoginRequest",
     "TokenResponse",
+    "TwoFactorRequiredResponse",
+    "Verify2FARequest",
     "create_token",
     "create_access_token",
     "verify_password",
     "login",
+    "verify_2fa",
 ]

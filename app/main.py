@@ -19,6 +19,8 @@ from app.routers.scada import router as scada_router
 from app.routers.events import router as scada_events_router
 from app.routers.small.control import router as small_control_router
 from app.routers.small.chemicals import router as small_chemicals_router
+from app.modules.crystal.router import router as crystal_product_router
+from app.modules.small.router import router as small_product_router
 
 from app.state.store import RealtimeStateStore
 from app.ws.manager import WebSocketManager
@@ -131,7 +133,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_allowed_origins,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=[
         "Authorization",
         "Content-Type",
@@ -145,10 +147,14 @@ app.include_router(auth_router)
 app.include_router(rbac_lagoons_router)
 app.include_router(ingest_router)
 app.include_router(alarm_thresholds_router)
+app.include_router(alarm_thresholds_router, prefix="/crystal")
+app.include_router(alarm_thresholds_router, prefix="/small")
 app.include_router(email_router)
 app.include_router(websocket_router)
 app.include_router(scada_router)
 app.include_router(scada_events_router)
+app.include_router(crystal_product_router)
+app.include_router(small_product_router)
 app.include_router(small_control_router)
 app.include_router(small_chemicals_router)
 

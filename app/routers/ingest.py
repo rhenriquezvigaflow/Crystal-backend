@@ -10,8 +10,11 @@ from sqlalchemy.dialects.postgresql import JSONB
 from app.alarms.notifier import dispatch_notifications
 from app.alarms.service import evaluate_alarms, log_persisted_alarm_transitions
 from app.core.config import settings
+from app.core.lagoon_aliases import normalize_lagoon_id
 from app.core.logging import get_logger
 from app.db.session import SessionLocal
+from app.models.lagoon import Lagoon
+from app.models.role import ProductType
 from app.services.ingest_service import ingest, log_persisted_ingest
 from app.security.api_key import verify_collector_key
 
@@ -35,8 +38,42 @@ SYNC_COLLECTOR_TAGS_SQL = text(
 
 class IngestPayload(BaseModel):
     lagoon_id: str
+    product_type: Optional[ProductType] = None
     timestamp: Optional[datetime] = None
     tags: dict
+
+
+def _product_value(value) -> str:
+    if isinstance(value, ProductType):
+        return value.value
+    return str(value)
+
+
+def _ensure_ingest_product(
+    *,
+    db,
+    lagoon_id: str,
+    requested_product_type: str | None,
+) -> str:
+    lagoon = (
+        db.query(Lagoon)
+        .filter(
+            Lagoon.id == lagoon_id,
+            Lagoon.enable.is_(True),
+        )
+        .first()
+    )
+    if lagoon is None:
+        raise HTTPException(status_code=404, detail="Lagoon not found")
+
+    lagoon_product_type = _product_value(lagoon.product_type)
+    if requested_product_type and requested_product_type != lagoon_product_type:
+        raise HTTPException(
+            status_code=409,
+            detail="Lagoon product_type mismatch",
+        )
+
+    return lagoon_product_type
 
 
 def _sync_collector_tags_and_alarms(
@@ -72,7 +109,12 @@ def _sync_collector_tags_and_alarms(
     return 0, 0
 
 
-def _persist_ingest(lagoon_id: str, ts_dt: datetime, tags: dict):
+def _persist_ingest(
+    lagoon_id: str,
+    requested_product_type: str | None,
+    ts_dt: datetime,
+    tags: dict,
+):
     notification_jobs = []
     transition_count = 0
     minute_row_count = 0
@@ -80,6 +122,11 @@ def _persist_ingest(lagoon_id: str, ts_dt: datetime, tags: dict):
 
     db = SessionLocal()
     try:
+        _ensure_ingest_product(
+            db=db,
+            lagoon_id=lagoon_id,
+            requested_product_type=requested_product_type,
+        )
         sync_registered_tags, sync_new_alarm_definitions = _sync_collector_tags_and_alarms(
             db=db,
             lagoon_id=lagoon_id,
@@ -143,7 +190,11 @@ async def ingest_scada(
     state = request.app.state.state_store
     ws = request.app.state.ws_manager
 
-    lagoon_id = payload.lagoon_id
+    lagoon_id = normalize_lagoon_id(payload.lagoon_id)
+    if not lagoon_id:
+        raise HTTPException(status_code=422, detail="lagoon_id is required")
+
+    product_type = payload.product_type.value if payload.product_type else None
     tags = payload.tags or {}
 
     # ===== UTC timestamp =====
@@ -167,6 +218,7 @@ async def ingest_scada(
             asyncio.to_thread(
                 _persist_ingest,
                 lagoon_id,
+                product_type,
                 ts_dt,
                 tags,
             ),
@@ -174,8 +226,9 @@ async def ingest_scada(
         )
     except asyncio.TimeoutError:
         logger.warning(
-            "[INGEST TIMEOUT] lagoon=%s ip=%s timeout_sec=%s",
+            "[INGEST TIMEOUT] lagoon=%s product=%s ip=%s timeout_sec=%s",
             lagoon_id,
+            product_type or "-",
             client_ip,
             INGEST_TIMEOUT_SEC,
         )
@@ -183,18 +236,22 @@ async def ingest_scada(
             status_code=504,
             detail="Ingest timeout",
         )
+    except HTTPException:
+        raise
     except Exception:
         logger.exception(
-            "[INGEST ERROR] lagoon=%s ip=%s",
+            "[INGEST ERROR] lagoon=%s product=%s ip=%s",
             lagoon_id,
+            product_type or "-",
             client_ip,
         )
         raise
 
     if alarm_transition_count:
         logger.info(
-            "[INGEST ALARMS] lagoon=%s count=%s",
+            "[INGEST ALARMS] lagoon=%s product=%s count=%s",
             lagoon_id,
+            product_type or "-",
             alarm_transition_count,
         )
 
@@ -207,8 +264,9 @@ async def ingest_scada(
         ingest_log = logger.debug
 
     ingest_log(
-        "[INGEST OK] lagoon=%s ip=%s rows=%s events=%s alarms=%s at=%s",
+        "[INGEST OK] lagoon=%s product=%s ip=%s rows=%s events=%s alarms=%s at=%s",
         lagoon_id,
+        product_type or "-",
         client_ip,
         minute_row_count,
         scada_event_count,

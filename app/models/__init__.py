@@ -4,3 +4,4 @@ from app.models.lagoon import Lagoon
 from app.models.user import User
 from app.models.role import Role, ProductType
 from app.models.user_role import UserRole
+from app.models.auth_2fa_challenge import Auth2FAChallenge

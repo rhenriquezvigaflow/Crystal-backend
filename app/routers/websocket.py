@@ -9,6 +9,7 @@ from app.core.config import settings
 from app.core.lagoon_aliases import normalize_lagoon_id
 from app.core.logging import get_logger
 from app.db.session import SessionLocal
+from app.models.role import ProductType
 from app.security.rbac import (
     describe_websocket_token_source,
     ensure_websocket_permission,
@@ -16,7 +17,8 @@ from app.security.rbac import (
 
 router = APIRouter(tags=["websocket"])
 logger = get_logger("ws.scada")
-WS_SUBPROTOCOL = "crystal-scada.v1"
+WS_SUBPROTOCOL = "scada.v1"
+WS_LEGACY_SUBPROTOCOL = "crystal-scada.v1"
 
 
 def _get_heartbeat_seconds() -> float:
@@ -49,6 +51,8 @@ def _resolve_accept_subprotocol(websocket: WebSocket) -> str | None:
     }
     if WS_SUBPROTOCOL in protocols:
         return WS_SUBPROTOCOL
+    if WS_LEGACY_SUBPROTOCOL in protocols:
+        return WS_LEGACY_SUBPROTOCOL
     return None
 
 
@@ -111,10 +115,23 @@ def _is_origin_allowed_for_websocket(
     return _is_origin_allowed(origin)
 
 
-def _is_valid_lagoon_id(lagoon_id: str) -> bool:
+def _is_valid_lagoon_id(
+    lagoon_id: str,
+    expected_product_type: ProductType | None = None,
+) -> bool:
     db = SessionLocal()
     try:
-        return get_lagoon_by_id(db=db, lagoon_id=lagoon_id) is not None
+        lagoon = get_lagoon_by_id(db=db, lagoon_id=lagoon_id)
+        if lagoon is None:
+            return False
+        if expected_product_type is None:
+            return True
+        lagoon_product = (
+            lagoon.product_type.value
+            if isinstance(lagoon.product_type, ProductType)
+            else str(lagoon.product_type)
+        )
+        return lagoon_product == expected_product_type.value
     finally:
         db.close()
 
@@ -316,6 +333,7 @@ async def _serve_scada_stream(
 async def _handle_scada_websocket(
     websocket: WebSocket,
     lagoon_id: str,
+    product_type: ProductType | None = None,
 ) -> None:
     requested_lagoon_id = lagoon_id
     lagoon_id = normalize_lagoon_id(lagoon_id)
@@ -401,11 +419,12 @@ async def _handle_scada_websocket(
         )
         return
 
-    if not _is_valid_lagoon_id(lagoon_id):
+    if not _is_valid_lagoon_id(lagoon_id, expected_product_type=product_type):
         logger.warning(
-            "[WS REJECTED] lagoon_id=%s requested_lagoon_id=%s client=%s code=%s reason=Lagoon not found",
+            "[WS REJECTED] lagoon_id=%s requested_lagoon_id=%s product=%s client=%s code=%s reason=Lagoon not found",
             lagoon_id,
             requested_lagoon_id,
+            product_type.value if product_type else "-",
             client,
             status.WS_1008_POLICY_VIOLATION,
         )
@@ -440,4 +459,17 @@ async def ws_scada_by_lagoon(
     await _handle_scada_websocket(
         websocket=websocket,
         lagoon_id=lagoon_id,
+    )
+
+
+@router.websocket("/ws/{product_type}/{lagoon_id}")
+async def ws_product_scada_by_lagoon(
+    websocket: WebSocket,
+    product_type: ProductType,
+    lagoon_id: str,
+):
+    await _handle_scada_websocket(
+        websocket=websocket,
+        lagoon_id=lagoon_id,
+        product_type=product_type,
     )

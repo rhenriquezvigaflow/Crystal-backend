@@ -13,7 +13,7 @@ from app.db.session import get_db
 from app.models.role import ProductType
 from app.security.rbac import SMALL_WRITE_ROLES, extract_user_roles, require_roles
 
-router = APIRouter(prefix="/api/small", tags=["Small Control"])
+router = APIRouter(prefix="/small", tags=["Small Control"])
 logger = get_logger("api.small.control")
 
 
