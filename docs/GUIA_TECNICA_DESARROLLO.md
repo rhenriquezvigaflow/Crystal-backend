@@ -1,6 +1,6 @@
 # Guia Tecnica de Desarrollo - Crystal Lagoons Backend
 
-**Ultima actualizacion:** 2026-04-27  
+**Ultima actualizacion:** 2026-06-12  
 **Publico:** Desarrolladores Python/FastAPI
 
 ## 1. Setup Rapido
@@ -65,11 +65,15 @@ app/
     ingest.py                     # POST /ingest/scada
     scada.py                      # /scada/{lagoon_id}/realtime|history|kpis
     events.py                     # /scada/{lagoon_id}/events|pump-events
-    websocket.py                  # /ws/scada/{lagoon_id}
+    websocket.py                  # /ws/scada/{lagoon_id} legacy, /ws/{product}/{lagoon_id}
     alarm_thresholds.py           # /alarms/{lagoon_id}/thresholds/pt-fit
     email.py                      # /email/test-alert
-    small/control.py              # /api/small/control
-    small/chemicals.py            # /api/small/chemicals
+    small/control.py              # /small/control
+    small/chemicals.py            # /small/chemicals
+  modules/
+    shared/product_router.py      # /{product}/lagoons|history|current
+    crystal/router.py             # /crystal/*
+    small/router.py               # /small/*
   auth/
     auth.py                       # /auth/login
     routers/lagoons_router.py     # /lagoons, /control/pump
@@ -103,10 +107,17 @@ Lagunas:
 curl "http://localhost:8090/lagoons" -H "Authorization: Bearer $TOKEN"
 ```
 
+Lagunas por producto:
+
+```powershell
+curl "http://localhost:8090/small/lagoons" -H "Authorization: Bearer $TOKEN"
+curl "http://localhost:8090/crystal/lagoons" -H "Authorization: Bearer $TOKEN"
+```
+
 Historico:
 
 ```powershell
-curl "http://localhost:8090/scada/costa_del_lago/history?start_date=2026-04-27T00:00:00Z&end_date=2026-04-27T23:59:59Z&resolution=hourly" `
+curl "http://localhost:8090/crystal/history?lagoon_id=costa_del_lago&start_date=2026-04-27T00:00:00Z&end_date=2026-04-27T23:59:59Z&resolution=hourly" `
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -120,7 +131,7 @@ curl "http://localhost:8090/scada/costa_del_lago/realtime" `
 WebSocket:
 
 ```text
-ws://localhost:8090/ws/scada/costa_del_lago?token=<jwt>
+ws://localhost:8090/ws/crystal/costa_del_lago?token=<jwt>
 ```
 
 ## 5. Ingest
@@ -129,7 +140,7 @@ ws://localhost:8090/ws/scada/costa_del_lago?token=<jwt>
 curl -X POST "http://localhost:8090/ingest/scada" `
   -H "X-Api-Key: $env:COLLECTOR_API_KEY" `
   -H "Content-Type: application/json" `
-  -d '{"lagoon_id":"costa_del_lago","tags":{"PT117_R_SCADA":2.31,"P006_STS_SCADA":1}}'
+  -d '{"lagoon_id":"costa_del_lago","product_type":"crystal","tags":{"PT117_R_SCADA":2.31,"P006_STS_SCADA":1}}'
 ```
 
 Resultado esperado:
@@ -138,6 +149,16 @@ Resultado esperado:
 - `scada_event` si hubo cambios de estado;
 - alarmas evaluadas;
 - tick WebSocket emitido.
+
+Small simulator:
+
+```powershell
+python scripts\upsert_small_sim_lagoon.py
+curl -X POST "http://localhost:8090/ingest/scada" `
+  -H "X-Api-Key: $env:COLLECTOR_API_KEY" `
+  -H "Content-Type: application/json" `
+  -d '{"lagoon_id":"small_sim","product_type":"small","tags":{"PT-123":1.4,"AE-100":650,"AE-022":7.2,"TEMP":28.4,"ORP":650,"Dosif":1.25}}'
+```
 
 ## 6. Testing
 

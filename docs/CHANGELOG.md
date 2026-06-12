@@ -1,5 +1,15 @@
 # Changelog de Documentacion
 
+## v2.1.0 - 2026-06-12
+
+Cambios documentados:
+
+- Se agrega `SMALL_LAGOONS.md` con endpoints, alta de `small_sim` y checklist.
+- Se documenta `product_type` opcional en ingest y la validacion contra `lagoons.product_type`.
+- Se actualizan rutas productizadas `/crystal/*`, `/small/*` y `WS /ws/{product_type}/{lagoon_id}`.
+- Se incorpora `VisualSmall` en roles soportados.
+- Se actualiza el flujo de alta de lagunas con ejemplos Crystal y Small.
+
 ## v2.0.0 - 2026-04-27
 
 Cambios documentados:

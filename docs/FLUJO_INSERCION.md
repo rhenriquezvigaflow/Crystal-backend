@@ -1,7 +1,7 @@
 # Flujo de Insercion y Publicacion SCADA
 
 **Version doc:** 2.0.0  
-**Actualizado:** 2026-04-27
+**Actualizado:** 2026-06-12
 
 ## 1. Entrada de Datos
 
@@ -12,13 +12,14 @@ Endpoint:
 Requisitos:
 
 - Header `X-Api-Key` valido.
-- Body JSON con `lagoon_id`, `timestamp` opcional y `tags`.
+- Body JSON con `lagoon_id`, `timestamp` opcional, `product_type` opcional y `tags`.
 
 Ejemplo:
 
 ```json
 {
   "lagoon_id": "costa_del_lago",
+  "product_type": "crystal",
   "timestamp": "2026-04-27T18:20:00Z",
   "tags": {
     "PT117_R_SCADA": 2.31,
@@ -30,16 +31,18 @@ Ejemplo:
 ## 2. Secuencia Ingest
 
 1. `ingest_scada` valida API key y payload.
-2. Normaliza timestamp a UTC.
-3. Ejecuta persistencia con timeout (`INGEST_REQUEST_TIMEOUT_SEC`).
-4. Si existe `sp_sync_collector_tags_and_alarms`, sincroniza tags y definiciones.
-5. `ingest_service.ingest(...)` detecta cambios de estado, cierra eventos abiertos, crea eventos nuevos y actualiza `scada_minute`.
-6. Se evalua motor de alarmas.
-7. Se hace `commit`.
-8. Se despachan notificaciones post-commit cuando corresponde.
-9. Se actualiza `RealtimeStateStore`.
-10. Se emite `tick` via WebSocket.
-11. Respuesta `200 {"ok": true}`.
+2. Normaliza `lagoon_id`.
+3. Normaliza timestamp a UTC.
+4. Valida que la laguna exista, este habilitada y que `product_type` coincida si fue enviado.
+5. Ejecuta persistencia con timeout (`INGEST_REQUEST_TIMEOUT_SEC`).
+6. Si existe `sp_sync_collector_tags_and_alarms`, sincroniza tags y definiciones.
+7. `ingest_service.ingest(...)` detecta cambios de estado, cierra eventos abiertos, crea eventos nuevos y actualiza `scada_minute`.
+8. Se evalua motor de alarmas.
+9. Se hace `commit`.
+10. Se despachan notificaciones post-commit cuando corresponde.
+11. Se actualiza `RealtimeStateStore`.
+12. Se emite `tick` via WebSocket.
+13. Respuesta `200 {"ok": true}`.
 
 ## 3. Estado Realtime
 
@@ -80,6 +83,16 @@ SCADA:
 - `GET /scada/{lagoon_id}/pump-events/last-3`
 - `GET /scada/{lagoon_id}/pump-events/report.xlsx`
 
+Productizadas:
+
+- `GET /crystal/lagoons`
+- `GET /crystal/history`
+- `GET /crystal/lagoons/{lagoon_id}/current`
+- `GET /small/lagoons`
+- `GET /small/history`
+- `GET /small/lagoons/{lagoon_id}/current`
+- `GET /small/lagoons/{lagoon_id}/pump-events/last-3`
+
 Lagunas y permisos:
 
 - `GET /lagoons`
@@ -112,9 +125,9 @@ El backend ya no es la fuente visual de layouts. La fuente actual esta en fronte
 
 Flujo:
 
-1. Backend entrega lagunas visibles por `GET /lagoons`.
+1. Backend entrega lagunas visibles por `GET /{product_type}/lagoons`.
 2. Frontend carga `src/assets/positions/{lagoon_id}.json`.
-3. Frontend abre `WS /ws/scada/{lagoon_id}`.
+3. Frontend abre `WS /ws/{product_type}/{lagoon_id}`.
 4. Frontend mezcla escena local + tags realtime.
 5. Si no hay realtime en 7 segundos, muestra el plano con `--`.
 
@@ -163,10 +176,11 @@ Definir:
 
 ### Paso 1: Crear YAML del Collector
 
-Ejemplo:
+Ejemplo Crystal:
 
 ```yaml
 lagoon_id: "ary"
+product_type: "crystal"
 source: rockwell
 poll_seconds: 1
 timezone: "Asia/Karachi"
@@ -185,6 +199,38 @@ tags:
 ```
 
 Si usas master config, agregar include en `collector_python/collectors.yml`.
+
+Ejemplo Small simulado:
+
+```yaml
+lagoon_id: "small_sim"
+product_type: "small"
+source: simulator
+poll_seconds: 1
+timezone: "America/Santiago"
+
+backend:
+  url: "http://127.0.0.1:8090/ingest/scada"
+
+tags:
+  "PT-123": 1.4
+  "AE-100": 650
+  "AE-022": 7.2
+  TEMP: 28.4
+  ORP: 650
+  Dosif: 1.25
+```
+
+En modo master, `product_type` puede ir en el YAML incluido o como override:
+
+```yaml
+product_type: "crystal"
+
+plcs:
+  - include: "config/ary.yml"
+  - include: "config/small_sim.yml"
+    product_type: "small"
+```
 
 ### Paso 2: Crear Registro Base en `lagoons`
 
@@ -219,6 +265,12 @@ FROM lagoons
 WHERE id = 'ary';
 ```
 
+Para `small_sim` se puede usar:
+
+```powershell
+python scripts\upsert_small_sim_lagoon.py
+```
+
 ### Paso 3: Crear Escena Frontend
 
 Crear:
@@ -235,6 +287,12 @@ Debe incluir al menos:
 - `valves`
 - `labels`
 - `plc_status`
+
+Para SmallLagoons, tambien se soportan:
+
+- `images[]` para fondos o assets sobre el plano;
+- `lagoon_metrics_overlay` para TEMP/ORP/Dosif;
+- `svg_component: "small_layout_1"` si se usa el layout Small actual.
 
 ### Paso 4: Asignar Permisos
 
@@ -253,9 +311,9 @@ Reiniciar backend si hubo alta o cambio de timezone.
 
 Checklist:
 
-1. `GET /lagoons` muestra la laguna.
+1. `GET /lagoons` o `GET /{product_type}/lagoons` muestra la laguna.
 2. `POST /ingest/scada` responde `{"ok": true}`.
-3. `WS /ws/scada/{lagoon_id}` entrega `tags`.
+3. `WS /ws/{product_type}/{lagoon_id}` entrega `tags`.
 4. El frontend tiene `src/assets/positions/{lagoon_id}.json`.
 5. Los tags del JSON coinciden con los tags enviados por collector.
 

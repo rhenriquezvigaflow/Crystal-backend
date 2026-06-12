@@ -1,6 +1,6 @@
 # Arquitectura y Flujo - Crystal Lagoons Backend
 
-**Ultima actualizacion:** 2026-04-27  
+**Ultima actualizacion:** 2026-06-12  
 **Version:** 2.0.0
 
 ## Vision General
@@ -13,8 +13,8 @@ Collector -> /ingest/scada -> IngestService -> PostgreSQL
                                 +-> Alarm engine
                                 +-> RealtimeStateStore -> WebSocketManager
 
-Frontend -> REST /api/* -> /auth, /lagoons, /scada, /alarms
-Frontend -> WS /ws/scada/{lagoon_id}
+Frontend -> REST /api/* -> /auth, /{product}, /scada, /alarms
+Frontend -> WS /ws/{product_type}/{lagoon_id}
 Frontend -> escenas locales src/assets/positions/*.json
 ```
 
@@ -42,6 +42,8 @@ En shutdown detiene monitores.
 - `app.routers.websocket`
 - `app.routers.scada`
 - `app.routers.events`
+- `app.modules.crystal.router`
+- `app.modules.small.router`
 - `app.routers.small.control`
 - `app.routers.small.chemicals`
 
@@ -67,6 +69,7 @@ Roles:
 - `AdminCrystal`
 - `VisualCrystal`
 - `AdminSmall`
+- `VisualSmall`
 - `SuperAdmin`
 
 Permisos por laguna:
@@ -86,6 +89,9 @@ La fuente de permisos finos es `vw_user_lagoons`.
 - `app/routers/websocket.py`: WebSocket SCADA.
 - `app/routers/scada.py`: realtime HTTP, historico y KPIs.
 - `app/routers/events.py`: eventos, eventos de bombas y XLSX.
+- `app/modules/shared/product_router.py`: router generico por producto.
+- `app/modules/crystal/router.py`: endpoints Crystal productizados.
+- `app/modules/small/router.py`: endpoints Small productizados.
 - `app/auth/services/lagoon_service.py`: alcance por producto y permisos.
 - `app/alarms/*`: motor de alarmas.
 - `app/alarms/thresholds/*`: API de umbrales PT/FIT.
@@ -109,6 +115,8 @@ Ingest:
 
 - `POST /ingest/scada`
 
+`product_type` es opcional en el payload. Cuando viene, debe coincidir con `lagoons.product_type`; esto protege las rutas Crystal/Small de datos cruzados.
+
 SCADA:
 
 - `GET /scada/{lagoon_id}/realtime`
@@ -127,15 +135,34 @@ Alarmas/email:
 
 Small:
 
-- `POST /api/small/control`
-- `PUT /api/small/control`
-- `GET /api/small/chemicals`
-- `POST /api/small/chemicals`
-- `DELETE /api/small/chemicals`
+- `GET /small/lagoons`
+- `GET /small/dashboard`
+- `GET /small/lagoons/{lagoon_id}/last-minute`
+- `GET /small/lagoons/{lagoon_id}/current`
+- `GET /small/history`
+- `GET /small/lagoons/{lagoon_id}/pump-events/last-3`
+- `GET /small/lagoons/{lagoon_id}/pump-events/report.xlsx`
+- `POST /small/tags/write`
+- `POST /small/control`
+- `PUT /small/control`
+- `GET /small/chemicals`
+- `POST /small/chemicals`
+- `DELETE /small/chemicals`
+
+Crystal productizado:
+
+- `GET /crystal/lagoons`
+- `GET /crystal/dashboard`
+- `GET /crystal/lagoons/{lagoon_id}/last-minute`
+- `GET /crystal/lagoons/{lagoon_id}/current`
+- `GET /crystal/history`
+- `GET /crystal/lagoons/{lagoon_id}/pump-events/last-3`
+- `GET /crystal/lagoons/{lagoon_id}/pump-events/report.xlsx`
 
 WebSocket:
 
 - `WS /ws/scada/{lagoon_id}`
+- `WS /ws/{product_type}/{lagoon_id}`
 
 ## Historico
 
@@ -154,6 +181,7 @@ Reglas:
 Endpoint:
 
 - `WS /ws/scada/{lagoon_id}`
+- `WS /ws/{product_type}/{lagoon_id}` para clientes productizados
 
 Payload relevante:
 
@@ -200,5 +228,6 @@ Vistas/objetos externos:
 
 - [ONE_PAGE_SUMMARY.md](./ONE_PAGE_SUMMARY.md)
 - [FLUJO_INSERCION.md](./FLUJO_INSERCION.md)
+- [SMALL_LAGOONS.md](./SMALL_LAGOONS.md)
 - [GUIA_TECNICA_DESARROLLO.md](./GUIA_TECNICA_DESARROLLO.md)
 - [README_ALARM_THRESHOLDS_API.md](./README_ALARM_THRESHOLDS_API.md)

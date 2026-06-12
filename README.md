@@ -10,9 +10,11 @@ Backend FastAPI para ingesta SCADA, lectura realtime, historico, eventos, RBAC y
 - Consultas SCADA (`realtime`, `history`, `kpis`, `events`, `pump-events`).
 - RBAC por laguna para lectura, edicion y control.
 - Catalogo de lagunas desde tabla `lagoons`.
+- Rutas por producto para Crystal y Small (`/crystal/*`, `/small/*`).
 - Alarmas `state`, `comm_loss` y `threshold`.
 - Umbrales PT/FIT configurables.
 - Notificaciones por email reales via SMTP y webhook simulado por log.
+- Validacion opcional de `product_type` durante ingest para evitar mezclar payloads Crystal y Small.
 
 Nota importante: el backend actual no registra endpoints de layouts/mapping SCADA. La UI visual carga escenas locales desde `crystal-frontend/src/assets/positions/*.json`.
 
@@ -38,7 +40,7 @@ En practica:
 - backend directo local: `/health`, `/scada/...`
 - frontend o proxy IIS/Vite: `/api/health`, `/api/scada/...`
 
-Hay routers que ya incluyen `/api/small` en su propio prefijo; no duplicar `/api/api/small`.
+Las rutas listadas abajo son las rutas directas de FastAPI. En despliegue detras de proxy/root path, el browser las consume bajo `/api`.
 
 ## Puesta en Marcha
 
@@ -98,10 +100,14 @@ run_backend.bat
 - `app/routers/websocket.py`: WebSocket autenticado por laguna.
 - `app/auth/auth.py`: login JWT.
 - `app/auth/routers/lagoons_router.py`: lagunas y permisos RBAC.
+- `app/modules/shared/product_router.py`: endpoints productizados para lagunas, current, last-minute, historico y eventos.
+- `app/modules/crystal/router.py`: router Crystal.
+- `app/modules/small/router.py`: router Small Lagoons.
 - `app/alarms/service.py`: evaluacion y transiciones OPEN/CLOSE.
 - `app/alarms/thresholds/*`: umbrales PT/FIT.
 - `app/integration/notifications.py`: orquestador de canales.
 - `app/services/email_service.py`: render de plantilla y envio SMTP.
+- `scripts/upsert_small_sim_lagoon.py`: alta/actualizacion rapida de `small_sim` en `lagoons`.
 
 ## Endpoints Activos
 
@@ -122,6 +128,8 @@ Ingesta:
 
 - `POST /ingest/scada`
 
+El payload acepta `product_type` opcional (`crystal` o `small`). Si viene informado, debe coincidir con `lagoons.product_type`; si no coincide, el backend responde `409 Lagoon product_type mismatch`.
+
 SCADA:
 
 - `GET /scada/{lagoon_id}/realtime`
@@ -134,11 +142,29 @@ SCADA:
 
 Small:
 
-- `POST /api/small/control`
-- `PUT /api/small/control`
-- `GET /api/small/chemicals`
-- `POST /api/small/chemicals`
-- `DELETE /api/small/chemicals`
+- `GET /small/lagoons`
+- `GET /small/dashboard`
+- `GET /small/lagoons/{lagoon_id}/last-minute`
+- `GET /small/lagoons/{lagoon_id}/current`
+- `GET /small/history`
+- `GET /small/lagoons/{lagoon_id}/pump-events/last-3`
+- `GET /small/lagoons/{lagoon_id}/pump-events/report.xlsx`
+- `POST /small/tags/write`
+- `POST /small/control`
+- `PUT /small/control`
+- `GET /small/chemicals`
+- `POST /small/chemicals`
+- `DELETE /small/chemicals`
+
+Crystal productizado:
+
+- `GET /crystal/lagoons`
+- `GET /crystal/dashboard`
+- `GET /crystal/lagoons/{lagoon_id}/last-minute`
+- `GET /crystal/lagoons/{lagoon_id}/current`
+- `GET /crystal/history`
+- `GET /crystal/lagoons/{lagoon_id}/pump-events/last-3`
+- `GET /crystal/lagoons/{lagoon_id}/pump-events/report.xlsx`
 
 Alarmas y notificaciones:
 
@@ -149,13 +175,14 @@ Alarmas y notificaciones:
 WebSocket:
 
 - `WS /ws/scada/{lagoon_id}`
+- `WS /ws/{product_type}/{lagoon_id}` para clientes productizados (`crystal` o `small`)
 
 ## Seguridad
 
 - Ingest exige `X-Api-Key`.
 - REST protegido exige `Authorization: Bearer <jwt>`.
 - WebSocket acepta token por query string o subprotocol.
-- Roles soportados: `AdminCrystal`, `VisualCrystal`, `AdminSmall`, `SuperAdmin`.
+- Roles soportados: `AdminCrystal`, `VisualCrystal`, `AdminSmall`, `VisualSmall`, `SuperAdmin`.
 - Permisos finos por laguna vienen de `vw_user_lagoons`.
 
 ## Observabilidad
@@ -170,6 +197,7 @@ WebSocket:
 - `docs/ONE_PAGE_SUMMARY.md`: resumen operativo.
 - `docs/ARQUITECTURA_Y_FLUJO.md`: arquitectura vigente.
 - `docs/FLUJO_INSERCION.md`: flujo de ingest y alta de lagunas.
+- `docs/SMALL_LAGOONS.md`: operacion y endpoints Small Lagoons.
 - `docs/ALARMAS_ACTUALES_Y_LOGICA.md`: motor de alarmas.
 - `docs/EMAIL_NOTIFICATIONS.md`: flujo SMTP.
 - `docs/README_ALARM_THRESHOLDS_API.md`: contrato PT/FIT.

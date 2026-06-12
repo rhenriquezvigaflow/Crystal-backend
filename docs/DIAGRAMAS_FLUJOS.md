@@ -1,6 +1,6 @@
 # Diagramas de Flujos - Crystal Lagoons Backend
 
-**Ultima actualizacion:** 2026-04-27  
+**Ultima actualizacion:** 2026-06-12  
 **Version:** 2.0
 
 ## 1. Arquitectura General
@@ -22,8 +22,8 @@ Collector ----> | POST /ingest/scada      |
                        PostgreSQL
 
 User UI ----> POST /auth/login ----> JWT
-User UI ----> GET /lagoons, /scada/*, /alarms/* (Bearer)
-User UI ----> WS /ws/scada/{lagoon_id} (token + can_view)
+User UI ----> GET /{product}/lagoons, /{product}/history, /alarms/* (Bearer)
+User UI ----> WS /ws/{product}/{lagoon_id} (token + can_view)
 ```
 
 ## 2. Flujo de Ingest
@@ -32,6 +32,7 @@ User UI ----> WS /ws/scada/{lagoon_id} (token + can_view)
 POST /ingest/scada
   |
   +--> validar X-Api-Key
+  +--> validar laguna habilitada y product_type si viene
   +--> parse timestamp UTC
   +--> sync opcional sp_sync_collector_tags_and_alarms
   +--> persistir en thread (timeout)
@@ -51,7 +52,7 @@ POST /ingest/scada
 ## 3. Flujo WebSocket
 
 ```text
-Cliente WS conecta a /ws/scada/{lagoon_id}
+Cliente WS conecta a /ws/{product}/{lagoon_id}
   |
   +--> validar JWT
   +--> validar permiso can_view o alcance por producto
@@ -62,12 +63,12 @@ Cliente WS conecta a /ws/scada/{lagoon_id}
 
 Endpoint:
 
-- `/ws/scada/{lagoon_id}?token=<jwt>`
+- `/ws/{product}/{lagoon_id}?token=<jwt>`
 
 ## 4. Flujo de Historico
 
 ```text
-GET /scada/{lagoon_id}/history
+GET /{product}/history?lagoon_id={lagoon_id}
   |
   +--> resolution: hourly|daily|weekly
   +--> existe vista scada_minute_<resolution> ?
@@ -109,6 +110,7 @@ Roles:
 - AdminCrystal
 - VisualCrystal
 - AdminSmall
+- VisualSmall
 - SuperAdmin
 
 Permisos:

@@ -1,6 +1,6 @@
 # Guia de Onboarding - Crystal Lagoons Backend
 
-**Ultima actualizacion:** 2026-04-27  
+**Ultima actualizacion:** 2026-06-12  
 **Tiempo estimado:** 2-4 horas
 
 ## Objetivo
@@ -64,19 +64,23 @@ curl http://localhost:8090/health
 ```powershell
 curl "http://localhost:8090/lagoons" `
   -H "Authorization: Bearer $TOKEN"
+curl "http://localhost:8090/crystal/lagoons" `
+  -H "Authorization: Bearer $TOKEN"
+curl "http://localhost:8090/small/lagoons" `
+  -H "Authorization: Bearer $TOKEN"
 ```
 
 3. Probar historico:
 
 ```powershell
-curl "http://localhost:8090/scada/costa_del_lago/history?start_date=2026-04-27T00:00:00Z&end_date=2026-04-27T23:59:59Z&resolution=hourly" `
+curl "http://localhost:8090/crystal/history?lagoon_id=costa_del_lago&start_date=2026-04-27T00:00:00Z&end_date=2026-04-27T23:59:59Z&resolution=hourly" `
   -H "Authorization: Bearer $TOKEN"
 ```
 
 4. Conectar WebSocket:
 
 ```text
-ws://localhost:8090/ws/scada/costa_del_lago?token=<jwt>
+ws://localhost:8090/ws/crystal/costa_del_lago?token=<jwt>
 ```
 
 5. Probar ingest con API key.

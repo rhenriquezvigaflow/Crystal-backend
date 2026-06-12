@@ -1,7 +1,7 @@
 # Arquitectura End-to-End (Collector -> Backend -> Frontend SCADA)
 
 **Version doc:** 2.0.0  
-**Actualizado:** 2026-04-27  
+**Actualizado:** 2026-06-12  
 **Audiencia:** backend, frontend, integracion SCADA y soporte
 
 ## 1. Objetivo
@@ -41,10 +41,10 @@ PLC
       -> RealtimeStateStore
       -> WS tick
   -> Frontend
-      -> GET /api/lagoons
+      -> GET /api/{product}/lagoons
       -> src/assets/positions/{lagoon_id}.json
-      -> WS /ws/scada/{lagoon_id}
-      -> GET /api/scada/{lagoon_id}/history
+      -> WS /ws/{product}/{lagoon_id}
+      -> GET /api/{product}/history
       -> SVG + overlays
 ```
 
@@ -55,6 +55,7 @@ Payload:
 ```json
 {
   "lagoon_id": "costa_del_lago",
+  "product_type": "crystal",
   "timestamp": "2026-04-27T18:20:00+00:00",
   "tags": {
     "PT117_R_SCADA": 2.31,
@@ -70,18 +71,19 @@ Header:
 Backend:
 
 1. valida API key;
-2. sincroniza tags/alarms si existe la funcion SQL opcional;
-3. persiste en `scada_event` y `scada_minute`;
-4. evalua alarmas;
-5. actualiza estado realtime;
-6. emite WebSocket `tick`.
+2. valida que `product_type` coincida con `lagoons.product_type` si fue enviado;
+3. sincroniza tags/alarms si existe la funcion SQL opcional;
+4. persiste en `scada_event` y `scada_minute`;
+5. evalua alarmas;
+6. actualiza estado realtime;
+7. emite WebSocket `tick`.
 
 ## 5. Escena SCADA Local
 
 La UI no depende de endpoints de layout. El sistema separa:
 
-1. SVG React en `src/svg/layout*.tsx`.
-2. Registro en `src/scada/svgRegistry.ts`.
+1. SVG React en `src/svg/*.tsx`.
+2. Registro automatico en `src/scada/svgRegistry.ts`.
 3. Escena por laguna en `src/assets/positions/*.json`.
 4. WebSocket `tags`: valores realtime.
 
@@ -133,7 +135,7 @@ Backend no pinta el SVG. El frontend aplica el color sobre los nodos por `svg_ta
 
 Backend:
 
-- `GET /scada/{lagoon_id}/history`
+- `GET /{product}/history?lagoon_id={lagoon_id}`
 
 Resolucion:
 

@@ -8,9 +8,10 @@ Indice curado de la documentacion vigente.
 2. `ONE_PAGE_SUMMARY.md`
 3. `ARQUITECTURA_Y_FLUJO.md`
 4. `FLUJO_INSERCION.md`
-5. `ALARMAS_ACTUALES_Y_LOGICA.md`
-6. `EMAIL_NOTIFICATIONS.md`
-7. `README_ALARM_THRESHOLDS_API.md`
+5. `SMALL_LAGOONS.md`
+6. `ALARMAS_ACTUALES_Y_LOGICA.md`
+7. `EMAIL_NOTIFICATIONS.md`
+8. `README_ALARM_THRESHOLDS_API.md`
 
 ## Fuente de Verdad por Tema
 
@@ -38,8 +39,17 @@ Indice curado de la documentacion vigente.
 - `FLUJO_INSERCION.md`
   - payload de ingest
   - metadata minima en BD
+  - `product_type` Crystal/Small
   - integracion con collector
   - relacion con escenas locales del frontend
+
+### Small Lagoons
+
+- `SMALL_LAGOONS.md`
+  - endpoints Small productizados
+  - validacion de `product_type`
+  - alta rapida de `small_sim`
+  - checklist backend/collector/frontend
 
 ### Alarmas
 
@@ -76,5 +86,6 @@ Indice curado de la documentacion vigente.
 
 - Si cambia una ruta activa, se actualiza `../README.md` y `ARQUITECTURA_Y_FLUJO.md`.
 - Si cambia el contrato consumido por frontend, se actualiza tambien `crystal-frontend/docs/API_CONTRACTS.md`.
+- Si cambia Small Lagoons, se actualiza `SMALL_LAGOONS.md`.
 - Si el cambio toca alarmas o notificaciones, se actualiza el documento tematico correspondiente.
 - Los layouts visuales viven hoy en frontend como JSON locales; no documentar endpoints de layout backend si no estan registrados en `app/main.py`.
