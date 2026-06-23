@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from app.services import ingest_service
@@ -113,13 +113,16 @@ def test_ingest_persists_state_tag_float_value_in_state_column(monkeypatch):
 
 def test_get_current_prefers_realtime_state_store():
     state_store = RealtimeStateStore()
-    asyncio.run(
+    now = datetime.now(timezone.utc)
+
+    updated = asyncio.run(
         state_store.update(
             lagoon_id="kirah",
             tags={"FIT001": 7.2},
-            ts="2026-04-16T12:00:10+00:00",
+            ts=now.isoformat(),
         )
     )
+    assert updated is True
 
     response = get_current(
         "kirah",
@@ -130,3 +133,49 @@ def test_get_current_prefers_realtime_state_store():
     assert response is not None
     assert response["lagoon_id"] == "kirah"
     assert response["tags"]["FIT001"] == 7.2
+
+
+def test_realtime_state_store_ignores_stale_ws_payload():
+    state_store = RealtimeStateStore()
+    now = datetime.now(timezone.utc)
+
+    first_update = asyncio.run(
+        state_store.update(
+            lagoon_id="kirah",
+            tags={"FIT001": 10.5},
+            ts=now.isoformat(),
+        )
+    )
+    stale_update = asyncio.run(
+        state_store.update(
+            lagoon_id="kirah",
+            tags={"FIT001": 3.1},
+            ts=(now - timedelta(seconds=1)).isoformat(),
+        )
+    )
+
+    snapshot = state_store.snapshot("kirah")
+
+    assert first_update is True
+    assert stale_update is False
+    assert snapshot["ts"] == now.isoformat()
+    assert snapshot["tags"]["FIT001"] == 10.5
+
+
+def test_realtime_state_store_ignores_old_first_payload():
+    state_store = RealtimeStateStore()
+    old_ts = datetime.now(timezone.utc) - timedelta(seconds=30)
+
+    updated = asyncio.run(
+        state_store.update(
+            lagoon_id="kirah",
+            tags={"FIT001": 3.1},
+            ts=old_ts.isoformat(),
+        )
+    )
+
+    snapshot = state_store.snapshot("kirah")
+
+    assert updated is False
+    assert snapshot["ts"] is None
+    assert "FIT001" not in snapshot["tags"]

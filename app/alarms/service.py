@@ -379,7 +379,7 @@ def _route_notifications(
     lagoon_name: str | None = None
 
     if not rules:
-        logger.info(
+        logger.debug(
             "[NOTIFY SKIP] reason=no_routing_rules definition=%s lagoon=%s tag=%s type=%s severity=%s event=%s",
             definition.id,
             transition.lagoon_id,
@@ -443,7 +443,7 @@ def _route_notifications(
         )
 
     if not jobs:
-        logger.info(
+        logger.debug(
             "[NOTIFY SKIP] reason=no_matching_targets definition=%s lagoon=%s tag=%s type=%s severity=%s event=%s candidate_rules=%s matched_rules=%s",
             definition.id,
             transition.lagoon_id,

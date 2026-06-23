@@ -208,6 +208,9 @@ async def ingest_scada(
     ts_iso = ts_dt.isoformat()
     client_ip = request.client.host if request.client else "-"
 
+    if not state.accepts_update_ts(lagoon_id, ts_iso):
+        return {"ok": True}
+
     try:
         (
             pump_last_on_updates,
@@ -255,15 +258,7 @@ async def ingest_scada(
             alarm_transition_count,
         )
 
-    ingest_log = logger.info
-    if (
-        minute_row_count == 0
-        and scada_event_count == 0
-        and alarm_transition_count == 0
-    ):
-        ingest_log = logger.debug
-
-    ingest_log(
+    logger.debug(
         "[INGEST OK] lagoon=%s product=%s ip=%s rows=%s events=%s alarms=%s at=%s",
         lagoon_id,
         product_type or "-",
@@ -275,12 +270,14 @@ async def ingest_scada(
     )
 
     # ===== REALTIME =====
-    await state.update(
+    state_updated = await state.update(
         lagoon_id=lagoon_id,
         tags=tags,
         ts=ts_iso,
         pump_last_on_updates=pump_last_on_updates,
     )
+    if not state_updated:
+        return {"ok": True}
 
     # ===== WS =====
     await ws.broadcast(

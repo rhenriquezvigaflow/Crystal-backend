@@ -71,7 +71,9 @@ class RealtimeStateStore:
         tags: Dict[str, Any],
         ts: str,
         pump_last_on_updates: Dict[str, str] | None = None,
-    ):
+    ) -> bool:
+        if not self.accepts_update_ts(lagoon_id, ts):
+            return False
 
         self._tags[lagoon_id].update(tags)
         self._tags[lagoon_id].update(
@@ -84,9 +86,51 @@ class RealtimeStateStore:
                 self._pump_last_on[lagoon_id][tag_id] = start_ts
                 self._start_ts[lagoon_id] = start_ts
 
+        return True
+
+    def accepts_update_ts(self, lagoon_id: str, ts: str) -> bool:
+        incoming_dt = self._parse_ts(ts)
+        return not (
+            self._is_old_for_realtime(incoming_dt)
+            or self._is_stale_ts(lagoon_id, incoming_dt)
+        )
+
     # =====================================================
     # INTERNAL HELPERS
     # =====================================================
+
+    def _parse_ts(self, ts: str) -> datetime | None:
+        try:
+            parsed = datetime.fromisoformat(ts)
+        except Exception:
+            return None
+
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+
+    def _is_old_for_realtime(self, incoming_dt: datetime | None) -> bool:
+        max_age_sec = settings.SCADA_REALTIME_MAX_PAYLOAD_AGE_SEC
+        if max_age_sec <= 0 or incoming_dt is None:
+            return False
+
+        age_sec = (datetime.now(timezone.utc) - incoming_dt).total_seconds()
+        return age_sec > max_age_sec
+
+    def _is_stale_ts(
+        self,
+        lagoon_id: str,
+        incoming_dt: datetime | None,
+    ) -> bool:
+        last_ts = self._last_ts.get(lagoon_id)
+        if not last_ts or incoming_dt is None:
+            return False
+
+        last_dt = self._parse_ts(last_ts)
+        if last_dt is None:
+            return False
+
+        return incoming_dt <= last_dt
 
     def _normalize_layout2_valve_state(
         self,

@@ -75,7 +75,7 @@ def log_persisted_ingest(summary: IngestWriteSummary) -> None:
         return
 
     if summary.minute_rows > 0 and summary.bucket_utc is not None:
-        logger.info(
+        logger.debug(
             "[INGEST DB] lagoon=%s bucket=%s rows=%s events=%s",
             summary.lagoon_id,
             summary.bucket_utc.isoformat(),
@@ -205,13 +205,6 @@ def ingest(
             _minute_buffers[lagoon_id] = _LagoonMinuteBuffer(
                 bucket_utc=bucket,
                 tags=incoming_tags,
-            )
-        else:
-            logger.warning(
-                "[INGEST OUT OF ORDER] lagoon=%s incoming_bucket=%s buffered_bucket=%s",
-                lagoon_id,
-                bucket.isoformat(),
-                current_buffer.bucket_utc.isoformat(),
             )
 
     upsert_rows: list[dict[str, Any]] = []

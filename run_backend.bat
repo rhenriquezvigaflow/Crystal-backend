@@ -15,7 +15,6 @@ echo.
 if not exist "%PYTHON_BIN%" (
   echo No se encontro el interprete del entorno virtual:
   echo %PYTHON_BIN%
-  pause
   exit /b 1
 )
 
@@ -31,4 +30,3 @@ set PYTHONUTF8=1
 
 echo.
 echo Uvicorn detenido
-pause

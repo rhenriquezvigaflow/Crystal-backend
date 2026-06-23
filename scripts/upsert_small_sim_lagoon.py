@@ -11,9 +11,9 @@ def main() -> None:
     payload = {
         "id": "small_sim",
         "name": "Small Simulator",
-        "plc_type": "simulator",
+        "plc_type": "siemens",
         "timezone": "America/Santiago",
-        "ip": None,
+        "ip": "192.168.100.10",
         "enable": True,
         "product_type": ProductType.SMALL,
     }

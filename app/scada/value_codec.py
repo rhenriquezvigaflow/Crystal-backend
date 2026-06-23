@@ -10,6 +10,12 @@ STATE_TAG_SUFFIXES = (
     "_ST_SCADA",
     "_STS_SCADA",
 )
+NUMERIC_TAG_SUFFIXES = (
+    "_INT",
+    "_DINT",
+    "_REAL",
+    "_FLOAT",
+)
 DEFAULT_STATE_MAX_VALUE = 3
 TAG_STATE_MAX_VALUE = 11
 
@@ -20,6 +26,14 @@ def is_state_tag_id(tag_id: str | None) -> bool:
 
     normalized = str(tag_id).strip().upper()
     return any(normalized.endswith(suffix) for suffix in STATE_TAG_SUFFIXES)
+
+
+def is_numeric_tag_id(tag_id: str | None) -> bool:
+    if not tag_id:
+        return False
+
+    normalized = str(tag_id).strip().upper()
+    return any(normalized.endswith(suffix) for suffix in NUMERIC_TAG_SUFFIXES)
 
 
 def is_state_value(value: Any) -> bool:
@@ -67,7 +81,11 @@ def coerce_state_value(
 
 
 def is_state_or_bool_value(value: Any, tag_id: str | None = None) -> bool:
-    if is_state_value(value) or is_bool_value(value):
+    if is_bool_value(value):
+        return True
+    if is_numeric_tag_id(tag_id):
+        return False
+    if is_state_value(value):
         return True
     return is_state_tag_id(tag_id) and coerce_state_value(value, max_state=TAG_STATE_MAX_VALUE) is not None
 
@@ -76,6 +94,9 @@ def to_storage_fields(
     value: Any,
     tag_id: str | None = None,
 ) -> tuple[Optional[int], Optional[float], Optional[bool]]:
+    if is_numeric_tag_id(tag_id) and is_numeric_value(value):
+        return None, float(value), None
+
     if is_state_tag_id(tag_id):
         coerced_state = coerce_state_value(value, max_state=TAG_STATE_MAX_VALUE)
         if coerced_state is not None:

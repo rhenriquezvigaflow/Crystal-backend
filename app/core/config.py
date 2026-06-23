@@ -171,6 +171,10 @@ class Settings(BaseSettings):
         default=10,
         description="Seconds without realtime data before PLC status becomes offline",
     )
+    SCADA_REALTIME_MAX_PAYLOAD_AGE_SEC: int = Field(
+        default=10,
+        description="Maximum payload age accepted for realtime WebSocket state updates",
+    )
     SCADA_WATCHDOG_ENABLED: bool = Field(
         default=True,
         description="Enable watchdog recovery for stalled SCADA data",
