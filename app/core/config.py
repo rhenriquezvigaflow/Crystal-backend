@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEFAULT_LOCAL_ORIGINS = [
@@ -87,7 +87,8 @@ class Settings(BaseSettings):
         description="Database connection timeout in seconds",
     )
     DB_POOL_TIMEOUT_SEC: int = Field(
-        default=30,
+        default=5,
+        gt=0,
         description="SQLAlchemy pool checkout timeout in seconds",
     )
     DB_POOL_RECYCLE_SEC: int = Field(
@@ -160,8 +161,24 @@ class Settings(BaseSettings):
         description="Fail startup when weak shared secrets are configured",
     )
     INGEST_REQUEST_TIMEOUT_SEC: float = Field(
-        default=125,
+        default=12,
+        gt=0,
         description="Ingest request timeout in seconds",
+    )
+    INGEST_DB_STATEMENT_TIMEOUT_MS: int = Field(
+        default=8000,
+        gt=0,
+        description="PostgreSQL statement timeout applied only to ingest transactions",
+    )
+    INGEST_DB_LOCK_TIMEOUT_MS: int = Field(
+        default=1500,
+        gt=0,
+        description="PostgreSQL lock timeout applied only to ingest transactions",
+    )
+    INGEST_COLLECTOR_SYNC_INTERVAL_SEC: float = Field(
+        default=30,
+        ge=0,
+        description="Minimum interval between collector metadata syncs per lagoon",
     )
     INGEST_RUNTIME_RESET_LOCK_TIMEOUT_SEC: float = Field(
         default=1,
@@ -263,6 +280,28 @@ class Settings(BaseSettings):
         default=2,
         description="Maximum background workers used for notification delivery",
     )
+
+    @model_validator(mode="after")
+    def validate_ingest_timeout_order(self) -> "Settings":
+        request_timeout_ms = self.INGEST_REQUEST_TIMEOUT_SEC * 1000
+        pool_timeout_ms = self.DB_POOL_TIMEOUT_SEC * 1000
+
+        if self.INGEST_DB_LOCK_TIMEOUT_MS >= self.INGEST_DB_STATEMENT_TIMEOUT_MS:
+            raise ValueError(
+                "INGEST_DB_LOCK_TIMEOUT_MS must be lower than "
+                "INGEST_DB_STATEMENT_TIMEOUT_MS"
+            )
+        if self.INGEST_DB_STATEMENT_TIMEOUT_MS >= request_timeout_ms:
+            raise ValueError(
+                "INGEST_DB_STATEMENT_TIMEOUT_MS must be lower than "
+                "INGEST_REQUEST_TIMEOUT_SEC"
+            )
+        if pool_timeout_ms >= request_timeout_ms:
+            raise ValueError(
+                "DB_POOL_TIMEOUT_SEC must be lower than "
+                "INGEST_REQUEST_TIMEOUT_SEC"
+            )
+        return self
 
     @property
     def is_production(self) -> bool:

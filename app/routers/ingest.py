@@ -1,4 +1,6 @@
 import asyncio
+from threading import Lock
+from time import monotonic
 from fastapi import APIRouter, Request, HTTPException, Depends
 from pydantic import BaseModel
 from datetime import datetime, timezone
@@ -21,19 +23,24 @@ from app.security.api_key import verify_collector_key
 router = APIRouter()
 logger = get_logger("api.ingest")
 INGEST_TIMEOUT_SEC = settings.INGEST_REQUEST_TIMEOUT_SEC
+INGEST_DB_TIMEOUTS_SQL = text(
+    """
+    SELECT
+        set_config('statement_timeout', :statement_timeout, true),
+        set_config('lock_timeout', :lock_timeout, true)
+    """
+)
 SYNC_COLLECTOR_TAGS_SQL = text(
     """
-    SELECT CASE
-        WHEN to_regproc('public.sp_sync_collector_tags_and_alarms') IS NULL
-            THEN NULL
-        ELSE public.sp_sync_collector_tags_and_alarms(
-            :lagoon_id,
-            :source_ts,
-            :tags_payload
-        )
-    END AS sync_result
+    SELECT public.sp_sync_collector_tags_and_alarms_v2(
+        :lagoon_id,
+        :source_ts,
+        :tags_payload
+    ) AS sync_result
     """
 ).bindparams(bindparam("tags_payload", type_=JSONB))
+_collector_sync_lock = Lock()
+_collector_sync_last_attempt: dict[str, float] = {}
 
 
 class IngestPayload(BaseModel):
@@ -76,6 +83,43 @@ def _ensure_ingest_product(
     return lagoon_product_type
 
 
+def _configure_ingest_transaction(*, db) -> None:
+    statement_timeout_ms = max(0, int(settings.INGEST_DB_STATEMENT_TIMEOUT_MS))
+    lock_timeout_ms = max(0, int(settings.INGEST_DB_LOCK_TIMEOUT_MS))
+    db.execute(
+        INGEST_DB_TIMEOUTS_SQL,
+        {
+            "statement_timeout": f"{statement_timeout_ms}ms",
+            "lock_timeout": f"{lock_timeout_ms}ms",
+        },
+    )
+
+
+def _should_sync_collector_metadata(lagoon_id: str) -> bool:
+    interval_sec = max(
+        0.0,
+        float(settings.INGEST_COLLECTOR_SYNC_INTERVAL_SEC),
+    )
+    if interval_sec == 0:
+        return True
+
+    now_monotonic = monotonic()
+    with _collector_sync_lock:
+        last_attempt = _collector_sync_last_attempt.get(lagoon_id)
+        if (
+            last_attempt is not None
+            and now_monotonic - last_attempt < interval_sec
+        ):
+            return False
+        _collector_sync_last_attempt[lagoon_id] = now_monotonic
+    return True
+
+
+def _reset_collector_sync_throttle() -> None:
+    with _collector_sync_lock:
+        _collector_sync_last_attempt.clear()
+
+
 def _sync_collector_tags_and_alarms(
     *,
     db,
@@ -87,14 +131,17 @@ def _sync_collector_tags_and_alarms(
         return 0, 0
 
     try:
-        result = db.execute(
-            SYNC_COLLECTOR_TAGS_SQL,
-            {
-                "lagoon_id": lagoon_id,
-                "source_ts": source_ts,
-                "tags_payload": tags,
-            },
-        ).scalar_one_or_none()
+        # Collector metadata is optional for the realtime path. A savepoint
+        # keeps a lock/statement failure from poisoning the ingest transaction.
+        with db.begin_nested():
+            result = db.execute(
+                SYNC_COLLECTOR_TAGS_SQL,
+                {
+                    "lagoon_id": lagoon_id,
+                    "source_ts": source_ts,
+                    "tags_payload": tags,
+                },
+            ).scalar_one_or_none()
 
         if isinstance(result, dict):
             return (
@@ -122,17 +169,24 @@ def _persist_ingest(
 
     db = SessionLocal()
     try:
+        _configure_ingest_transaction(db=db)
         _ensure_ingest_product(
             db=db,
             lagoon_id=lagoon_id,
             requested_product_type=requested_product_type,
         )
-        sync_registered_tags, sync_new_alarm_definitions = _sync_collector_tags_and_alarms(
-            db=db,
-            lagoon_id=lagoon_id,
-            source_ts=ts_dt,
-            tags=tags,
-        )
+        sync_registered_tags = 0
+        sync_new_alarm_definitions = 0
+        if tags and _should_sync_collector_metadata(lagoon_id):
+            (
+                sync_registered_tags,
+                sync_new_alarm_definitions,
+            ) = _sync_collector_tags_and_alarms(
+                db=db,
+                lagoon_id=lagoon_id,
+                source_ts=ts_dt,
+                tags=tags,
+            )
 
         pump_last_on_updates, ingest_summary = ingest(
             lagoon_id=lagoon_id,
