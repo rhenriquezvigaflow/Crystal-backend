@@ -1,11 +1,21 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Enum as SQLEnum, String, text
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Enum as SQLEnum,
+    ForeignKey,
+    Integer,
+    String,
+    text,
+)
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
 from app.models.base import Base
+from app.models.country import Country
 from app.models.role import ProductType
+
 
 class Lagoon(Base):
     __tablename__ = "lagoons"
@@ -13,6 +23,13 @@ class Lagoon(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True)
     name: Mapped[str | None] = mapped_column(String, nullable=True)
     plc_type: Mapped[str | None] = mapped_column(String, nullable=True)
+    country_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("countries.id"),
+        nullable=True,
+        index=True,
+    )
+    country: Mapped[Country | None] = relationship()
     timezone: Mapped[str | None] = mapped_column(String, nullable=True)
     ip: Mapped[str | None] = mapped_column(String, nullable=True)
     enable: Mapped[bool] = mapped_column(

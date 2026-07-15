@@ -4,7 +4,7 @@ from collections.abc import Iterable
 
 from fastapi import HTTPException
 from sqlalchemy import or_, text
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.core.lagoon_aliases import normalize_lagoon_id
 from app.core.logging import get_logger
@@ -88,10 +88,51 @@ def _assigned_lagoon_ids(db: Session, user_id: str) -> set[str]:
     }
 
 
+def get_lagoon_permissions(
+    db: Session,
+    *,
+    user_id: str,
+    lagoon_ids: Iterable[str],
+) -> dict[str, dict[str, bool]]:
+    ids = sorted({lagoon_id for lagoon_id in lagoon_ids if lagoon_id})
+    if not ids:
+        return {}
+
+    rows = db.execute(
+        text(
+            """
+            SELECT
+                lagoon_id::text AS lagoon_id,
+                BOOL_OR(can_edit) AS can_edit,
+                BOOL_OR(can_control) AS can_control
+            FROM vw_user_lagoons
+            WHERE user_id::text = :user_id
+              AND lagoon_id::text = ANY(CAST(:lagoon_ids AS text[]))
+            GROUP BY lagoon_id::text
+            """
+        ),
+        {
+            "user_id": user_id,
+            "lagoon_ids": ids,
+        },
+    ).mappings().all()
+
+    return {
+        str(row["lagoon_id"]): {
+            "can_edit": bool(row["can_edit"]),
+            "can_control": bool(row["can_control"]),
+        }
+        for row in rows
+        if row.get("lagoon_id") is not None
+    }
+
+
 def _map_lagoon(lagoon: Lagoon) -> dict:
     return {
         "lagoon_id": lagoon.id,
         "lagoon_name": lagoon.name,
+        "country_id": lagoon.country_id,
+        "country_name": lagoon.country.name if lagoon.country else None,
         "timezone": lagoon.timezone,
         "ip": lagoon.ip,
         "enable": bool(lagoon.enable),
@@ -220,6 +261,7 @@ def get_product_lagoons_for_user(
 ) -> list[Lagoon]:
     query = (
         db.query(Lagoon)
+        .options(joinedload(Lagoon.country))
         .filter(
             Lagoon.product_type == product_type,
             Lagoon.enable.is_(True),
@@ -260,7 +302,12 @@ def get_accessible_lagoons(
     if product_enums:
         filters.append(Lagoon.product_type.in_(product_enums))
 
-    query = db.query(Lagoon).filter(Lagoon.enable.is_(True)).order_by(Lagoon.name.asc())
+    query = (
+        db.query(Lagoon)
+        .options(joinedload(Lagoon.country))
+        .filter(Lagoon.enable.is_(True))
+        .order_by(Lagoon.name.asc())
+    )
     if len(filters) == 1:
         lagoons = query.filter(filters[0]).all()
     else:

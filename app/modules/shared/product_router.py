@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 import re
-from typing import Any, Literal
+from typing import Any, Literal, Mapping
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, Field
@@ -14,6 +14,7 @@ from app.auth.services.lagoon_service import (
     PERMISSION_CONTROL,
     PERMISSION_VIEW,
     ensure_lagoon_access,
+    get_lagoon_permissions,
     get_product_lagoons_for_user,
     resolve_permitted_product_types,
     user_has_permission,
@@ -75,25 +76,16 @@ def _slugify_filename(value: str) -> str:
 
 def _map_lagoon_access(
     *,
-    db: Session,
     lagoon: Lagoon,
     user_id: str,
     user_roles: list[str],
     write_roles: list[str],
+    lagoon_permissions: Mapping[str, Mapping[str, bool]],
 ) -> dict[str, Any]:
     product_write = _has_write_role(user_roles, write_roles)
-    can_edit = product_write or user_has_permission(
-        db=db,
-        user_id=user_id,
-        lagoon_id=lagoon.id,
-        permission="can_edit",
-    )
-    can_control = product_write or user_has_permission(
-        db=db,
-        user_id=user_id,
-        lagoon_id=lagoon.id,
-        permission="can_control",
-    )
+    specific_permissions = lagoon_permissions.get(lagoon.id, {})
+    can_edit = product_write or bool(specific_permissions.get("can_edit"))
+    can_control = product_write or bool(specific_permissions.get("can_control"))
 
     product_value = (
         lagoon.product_type.value
@@ -106,6 +98,8 @@ def _map_lagoon_access(
         "lagoon_id": lagoon.id,
         "lagoon_name": lagoon.name,
         "plc_type": lagoon.plc_type,
+        "country_id": lagoon.country_id,
+        "country_name": lagoon.country.name if lagoon.country else None,
         "timezone": lagoon.timezone,
         "ip": lagoon.ip,
         "enable": bool(lagoon.enable),
@@ -142,6 +136,16 @@ def create_product_router(config: ProductRouterConfig) -> APIRouter:
             user_roles=roles,
             product_type=product,
         )
+        product_write = _has_write_role(roles, config.write_roles)
+        lagoon_permissions = (
+            {}
+            if product_write
+            else get_lagoon_permissions(
+                db=db,
+                user_id=user_id,
+                lagoon_ids=(lagoon.id for lagoon in lagoons),
+            )
+        )
         logger.info(
             "[LAGOONS] list_for_user endpoint=/api/%s/lagoons user_id=%s email=%s roles=%s permitted_products=%s lagoons_count=%s",
             product_value,
@@ -153,11 +157,11 @@ def create_product_router(config: ProductRouterConfig) -> APIRouter:
         )
         return [
             _map_lagoon_access(
-                db=db,
                 lagoon=lagoon,
                 user_id=user_id,
                 user_roles=roles,
                 write_roles=config.write_roles,
+                lagoon_permissions=lagoon_permissions,
             )
             for lagoon in lagoons
         ]
