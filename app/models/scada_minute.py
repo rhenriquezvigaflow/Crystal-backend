@@ -17,6 +17,10 @@ from sqlalchemy import (
 from app.models.base import Base
 
 
+COLLECTOR_OFFLINE_SOURCE = "Collector_offline"
+COLLECTOR_ONLINE_SOURCE = "Collector_online"
+
+
 class ScadaMinute(Base):
     __tablename__ = "scada_minute"
 
@@ -63,6 +67,13 @@ class ScadaMinute(Base):
 
     value_bool = Column(
         Boolean,
+        nullable=True,
+    )
+
+    # Origen de conexión que persistió el dato. Los registros históricos
+    # pueden permanecer nulos porque no se infiere su procedencia.
+    source = Column(
+        String(30),
         nullable=True,
     )
 

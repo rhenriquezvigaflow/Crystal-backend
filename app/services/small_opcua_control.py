@@ -17,6 +17,8 @@ DEFAULT_COLLECTORS_CONFIG = (
     / "collectors.yml"
 )
 SUPPORTED_PUMP_ACTIONS = {"partir", "parar"}
+SUPPORTED_CONTROL_SOURCES = {"siemens", "rockwell"}
+SUPPORTED_PUMP_WRITE_MODES = {"pulse", "set"}
 SUPPORTED_WRITE_TYPES = {
     "bool",
     "int16",
@@ -61,6 +63,10 @@ class PumpControlTarget:
     timeout_sec: float
     username: str | None = None
     password: str | None = None
+    driver: str = "siemens"
+    slot: int | None = None
+    action_mode: str = "pulse"
+    action_value: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -77,6 +83,8 @@ class ValueWriteTarget:
     timeout_sec: float
     username: str | None = None
     password: str | None = None
+    driver: str = "siemens"
+    slot: int | None = None
 
 
 def _config_path() -> Path:
@@ -154,6 +162,214 @@ def _find_lagoon_config(
     )
 
 
+def _control_source(config: dict[str, Any]) -> str:
+    source = str(config.get("source") or "").strip().lower()
+    if not source and isinstance(config.get("opcua_modules"), list):
+        # Older Siemens files predate an explicit source field.
+        return "siemens"
+    if source not in SUPPORTED_CONTROL_SOURCES:
+        supported = ", ".join(sorted(SUPPORTED_CONTROL_SOURCES))
+        raise PumpControlConfigurationError(
+            f"Small Lagoon control source must be one of: {supported}"
+        )
+    return source
+
+
+def _rockwell_modules(config: dict[str, Any]) -> list[dict[str, Any]]:
+    modules = config.get("control_modules")
+    if not isinstance(modules, list):
+        raise PumpControlConfigurationError("control_modules must be a list")
+    return [module for module in modules if isinstance(module, dict)]
+
+
+def _select_rockwell_module(
+    config: dict[str, Any],
+    action: str | None,
+    module_id: str | None,
+    command_id: str | None = None,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    normalized_module_id = str(module_id or "").strip().lower()
+    normalized_command_id = str(command_id or "").strip().lower()
+    matches: list[tuple[dict[str, Any], dict[str, Any] | None]] = []
+
+    for module in _rockwell_modules(config):
+        candidate_module_id = str(module.get("id") or "").strip().lower()
+        if normalized_module_id and candidate_module_id != normalized_module_id:
+            continue
+
+        if action:
+            actions = module.get("actions") or {}
+            if isinstance(actions, dict) and action in actions:
+                matches.append((module, None))
+            continue
+
+        write_commands = module.get("write_commands") or {}
+        if not isinstance(write_commands, dict):
+            continue
+        for configured_id, command in write_commands.items():
+            if (
+                str(configured_id).strip().lower() == normalized_command_id
+                and isinstance(command, dict)
+            ):
+                matches.append((module, command))
+
+    if not matches:
+        item = f"Action {action!r}" if action else f"Write command {command_id!r}"
+        module_label = f" for module {module_id!r}" if module_id else ""
+        raise PumpControlConfigurationError(f"{item} is not configured{module_label}")
+    if len(matches) > 1:
+        item = "action" if action else "write command"
+        raise PumpControlConfigurationError(
+            f"Multiple modules define this {item}; module_id is required"
+        )
+    return matches[0]
+
+
+def _rockwell_address(config: dict[str, Any], logical_tag: str) -> str:
+    tags = config.get("tags")
+    if not isinstance(tags, dict):
+        raise PumpControlConfigurationError("tags must be a mapping")
+    address = tags.get(logical_tag)
+    if address is None or not str(address).strip():
+        raise PumpControlConfigurationError(
+            f"Configured logical tag {logical_tag!r} does not have a PLC address"
+        )
+    return str(address).strip()
+
+
+def _rockwell_connection(
+    config: dict[str, Any],
+    module: dict[str, Any],
+) -> tuple[str, int, float]:
+    rockwell = config.get("rockwell")
+    if not isinstance(rockwell, dict):
+        raise PumpControlConfigurationError("rockwell must be a mapping")
+    ip = str(module.get("ip") or rockwell.get("ip") or "").strip()
+    if not ip:
+        raise PumpControlConfigurationError("Rockwell IP is missing")
+    slot = int(module.get("slot", rockwell.get("slot", 0)))
+    timeout = float(module.get("timeout_sec", rockwell.get("timeout_sec", 5)))
+    return ip, slot, timeout
+
+
+def _rockwell_action_definition(
+    module: dict[str, Any],
+    action: str,
+) -> tuple[str, str, bool | None]:
+    actions = module.get("actions") or {}
+    raw_action = actions.get(action) if isinstance(actions, dict) else None
+    if isinstance(raw_action, str):
+        logical_tag = raw_action.strip()
+        mode = "pulse"
+        action_value = None
+    elif isinstance(raw_action, dict):
+        logical_tag = str(raw_action.get("tag") or "").strip()
+        mode = str(raw_action.get("mode") or "pulse").strip().lower()
+        action_value = raw_action.get("value")
+    else:
+        logical_tag = ""
+        mode = ""
+        action_value = None
+
+    if not logical_tag:
+        raise PumpControlConfigurationError(
+            f"Action {action!r} must reference a logical tag"
+        )
+    if mode not in SUPPORTED_PUMP_WRITE_MODES:
+        raise PumpControlConfigurationError(
+            f"Unsupported pump write mode {mode!r} for action {action!r}"
+        )
+    if mode == "set" and not isinstance(action_value, bool):
+        raise PumpControlConfigurationError(
+            f"Set action {action!r} must configure a boolean value"
+        )
+    if mode == "pulse":
+        action_value = None
+    return logical_tag, mode, action_value
+
+
+def _resolve_rockwell_pump_target(
+    config: dict[str, Any],
+    lagoon_id: str,
+    action: str,
+    module_id: str | None,
+) -> PumpControlTarget:
+    module, _ = _select_rockwell_module(config, action, module_id)
+    logical_tag, action_mode, action_value = _rockwell_action_definition(
+        module,
+        action,
+    )
+    if logical_tag == module.get("state_tag"):
+        raise PumpControlConfigurationError(
+            "Pump state tag cannot be configured as a writable action"
+        )
+    endpoint, slot, timeout_sec = _rockwell_connection(config, module)
+    pulse_seconds = 0.0
+    if action_mode == "pulse":
+        pulse_seconds = float(module.get("pulse_seconds", 0.25))
+        if pulse_seconds <= 0 or pulse_seconds > 5:
+            raise PumpControlConfigurationError(
+                "pulse_seconds must be greater than 0 and at most 5 seconds"
+            )
+    return PumpControlTarget(
+        lagoon_id=str(config.get("lagoon_id") or lagoon_id),
+        module_id=str(module.get("id") or ""),
+        logical_tag=logical_tag,
+        endpoint=endpoint,
+        node_id=_rockwell_address(config, logical_tag),
+        pulse_seconds=pulse_seconds,
+        timeout_sec=timeout_sec,
+        driver="rockwell",
+        slot=slot,
+        action_mode=action_mode,
+        action_value=action_value,
+    )
+
+
+def _resolve_rockwell_value_target(
+    config: dict[str, Any],
+    lagoon_id: str,
+    command_id: str,
+    module_id: str | None,
+) -> ValueWriteTarget:
+    module, command = _select_rockwell_module(
+        config,
+        None,
+        module_id,
+        command_id,
+    )
+    assert command is not None
+    logical_tag = str(command.get("tag") or "").strip()
+    if not logical_tag:
+        raise PumpControlConfigurationError(
+            f"Write command {command_id!r} must reference a logical tag"
+        )
+    if logical_tag == module.get("state_tag"):
+        raise PumpControlConfigurationError(
+            "Pump state tag cannot be configured as a writable value"
+        )
+    data_type = str(command.get("data_type") or "").strip().lower()
+    if data_type not in SUPPORTED_WRITE_TYPES:
+        raise PumpControlConfigurationError(
+            f"Unsupported write data_type {data_type!r}"
+        )
+    endpoint, slot, timeout_sec = _rockwell_connection(config, module)
+    min_value = command.get("min")
+    max_value = command.get("max")
+    return ValueWriteTarget(
+        lagoon_id=str(config.get("lagoon_id") or lagoon_id),
+        module_id=str(module.get("id") or ""),
+        command_id=str(command_id).strip().lower(),
+        logical_tag=logical_tag,
+        endpoint=endpoint,
+        node_id=_rockwell_address(config, logical_tag),
+        data_type=data_type,
+        min_value=float(min_value) if min_value is not None else None,
+        max_value=float(max_value) if max_value is not None else None,
+        timeout_sec=timeout_sec,
+        driver="rockwell",
+        slot=slot,
+    )
 def _select_module(
     config: dict[str, Any],
     action: str,
@@ -219,6 +435,15 @@ def resolve_pump_control_target(
             f"Lagoon {lagoon_id!r} is not configured as product_type small"
         )
 
+    source = _control_source(config)
+    if source == "rockwell":
+        return _resolve_rockwell_pump_target(
+            config,
+            lagoon_id,
+            normalized_action,
+            module_id,
+        )
+
     module = _select_module(config, normalized_action, module_id)
     actions = module.get("actions") or {}
     logical_tag = actions.get(normalized_action)
@@ -279,6 +504,15 @@ def resolve_value_write_target(
     if product_type and product_type != "small":
         raise PumpControlConfigurationError(
             f"Lagoon {lagoon_id!r} is not configured as product_type small"
+        )
+
+    source = _control_source(config)
+    if source == "rockwell":
+        return _resolve_rockwell_value_target(
+            config,
+            lagoon_id,
+            command_id,
+            module_id,
         )
 
     normalized_module_id = str(module_id or "").strip().lower()
@@ -362,6 +596,51 @@ def _default_client_factory(endpoint: str, timeout: float):
     from opcua import Client
 
     return Client(endpoint, timeout=timeout)
+
+
+def _default_rockwell_client_factory(
+    endpoint: str,
+    slot: int,
+    timeout: float,
+):
+    from pycomm3 import LogixDriver
+
+    return LogixDriver(endpoint, slot=slot, timeout=timeout)
+
+
+def _result_items(result: Any) -> list[Any]:
+    return result if isinstance(result, list) else [result]
+
+
+def _ensure_rockwell_success(result: Any, operation: str) -> None:
+    for item in _result_items(result):
+        error = getattr(item, "error", None)
+        if error:
+            raise RuntimeError(f"Rockwell {operation} failed: {error}")
+
+
+def _read_rockwell_value(client: Any, tag: str) -> Any:
+    result = client.read(tag)
+    _ensure_rockwell_success(result, f"read {tag!r}")
+    item = _result_items(result)[0]
+    return getattr(item, "value", item)
+
+
+def _write_rockwell_value(client: Any, tag: str, value: Any) -> None:
+    # pycomm3 receives a (tag, value) tuple for each write request.
+    result = client.write((tag, value))
+    _ensure_rockwell_success(result, f"write {tag!r}")
+
+
+def _raise_control_write_error(
+    target: PumpControlTarget | ValueWriteTarget,
+    operation: str,
+    exc: Exception,
+) -> PumpControlWriteError:
+    detail = str(exc).strip() or exc.__class__.__name__
+    return PumpControlWriteError(
+        f"{target.driver} PLC {operation} failed at {target.endpoint}: {detail}"
+    )
 
 
 def write_boolean_without_timestamps(node: Any, value: bool) -> None:
@@ -470,6 +749,41 @@ def pulse_pump_action(
         module_id=module_id,
         config_path=config_path,
     )
+    if target.driver == "rockwell":
+        factory = client_factory or _default_rockwell_client_factory
+        with _get_pulse_lock(target):
+            client = factory(
+                target.endpoint,
+                int(target.slot or 0),
+                target.timeout_sec,
+            )
+            try:
+                client.open()
+                if target.action_mode == "set":
+                    _write_rockwell_value(
+                        client,
+                        target.node_id,
+                        bool(target.action_value),
+                    )
+                else:
+                    _write_rockwell_value(client, target.node_id, True)
+                    try:
+                        sleep(target.pulse_seconds)
+                    finally:
+                        _write_rockwell_value(client, target.node_id, False)
+            except Exception as exc:
+                raise _raise_control_write_error(
+                    target,
+                    f"action {action!r}",
+                    exc,
+                ) from exc
+            finally:
+                try:
+                    client.close()
+                except Exception:
+                    pass
+        return target
+
     factory = client_factory or _default_client_factory
 
     with _get_pulse_lock(target):
@@ -517,6 +831,31 @@ def write_configured_value(
         config_path=config_path,
     )
     normalized_value = _coerce_write_value(target, value)
+    if target.driver == "rockwell":
+        factory = client_factory or _default_rockwell_client_factory
+        with _get_write_lock(target):
+            client = factory(
+                target.endpoint,
+                int(target.slot or 0),
+                target.timeout_sec,
+            )
+            try:
+                client.open()
+                previous_value = _read_rockwell_value(client, target.node_id)
+                _write_rockwell_value(client, target.node_id, normalized_value)
+            except Exception as exc:
+                raise _raise_control_write_error(
+                    target,
+                    f"write command {target.command_id!r}",
+                    exc,
+                ) from exc
+            finally:
+                try:
+                    client.close()
+                except Exception:
+                    pass
+        return target, previous_value, normalized_value
+
     factory = client_factory or _default_client_factory
 
     with _get_write_lock(target):

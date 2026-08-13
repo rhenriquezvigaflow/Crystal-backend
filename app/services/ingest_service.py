@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.models.scada_event import ScadaEvent
-from app.models.scada_minute import ScadaMinute
+from app.models.scada_minute import COLLECTOR_ONLINE_SOURCE, ScadaMinute
 from app.scada.value_codec import (
     TAG_STATE_MAX_VALUE,
     coerce_state_value,
@@ -218,6 +218,7 @@ def ingest(
                 "state": state,
                 "value_num": value_num,
                 "value_bool": value_bool,
+                "source": COLLECTOR_ONLINE_SOURCE,
             }
         )
 
@@ -278,6 +279,7 @@ def ingest(
                 "state": stmt.excluded.state,
                 "value_num": stmt.excluded.value_num,
                 "value_bool": stmt.excluded.value_bool,
+                "source": stmt.excluded.source,
                 "updated_at": datetime.now(timezone.utc),
             },
         )

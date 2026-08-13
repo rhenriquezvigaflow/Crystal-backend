@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from collections.abc import Iterable
 
@@ -135,6 +135,7 @@ def _map_lagoon(lagoon: Lagoon) -> dict:
         "country_name": lagoon.country.name if lagoon.country else None,
         "timezone": lagoon.timezone,
         "ip": lagoon.ip,
+        "scada_layout": getattr(lagoon, "scada_layout", None),
         "enable": bool(lagoon.enable),
         "product_type": (
             lagoon.product_type.value

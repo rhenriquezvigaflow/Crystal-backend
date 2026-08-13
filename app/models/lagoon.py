@@ -1,4 +1,4 @@
-from datetime import datetime
+﻿from datetime import datetime
 
 from sqlalchemy import (
     Boolean,
@@ -39,6 +39,7 @@ class Lagoon(Base):
         server_default=text("true"),
         index=True,
     )
+    scada_layout: Mapped[str | None] = mapped_column(String, nullable=True)
     product_type: Mapped[ProductType] = mapped_column(
         SQLEnum(
             ProductType,

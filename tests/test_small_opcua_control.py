@@ -8,6 +8,7 @@ from app.services.small_opcua_control import (
     UnsupportedPumpActionError,
     ValueWriteValidationError,
     pulse_pump_action,
+    resolve_pump_control_target,
     resolve_value_write_target,
     write_configured_value,
     write_boolean_without_timestamps,
@@ -79,6 +80,71 @@ class FakeClient:
         return self.node
 
 
+ROCKWELL_CONFIG = """
+lagoon_id: small_sim
+product_type: small
+source: rockwell
+rockwell:
+  ip: 192.168.100.11
+  slot: 0
+  timeout_sec: 5
+tags:
+  Motor: PUMP_STATE
+  Partir: PUMP_COMMAND
+  CONTADOR: DOSING_VALUE
+control_modules:
+  - id: recirculation_pump
+    state_tag: Motor
+    actions:
+      partir:
+        tag: Partir
+        mode: set
+        value: true
+      parar:
+        tag: Partir
+        mode: set
+        value: false
+  - id: dosif001
+    write_commands:
+      set_contador:
+        tag: CONTADOR
+        data_type: int32
+        min: 0
+        max: 1000
+"""
+
+
+class FakeRockwellResult:
+    def __init__(self, value, error=None) -> None:
+        self.value = value
+        self.error = error
+
+
+class FakeRockwellClient:
+    def __init__(self, endpoint, slot, timeout, memory, writes) -> None:
+        self.endpoint = endpoint
+        self.slot = slot
+        self.timeout = timeout
+        self.memory = memory
+        self.writes = writes
+        self.opened = False
+
+    def open(self) -> None:
+        self.opened = True
+
+    def close(self) -> None:
+        self.opened = False
+
+    def read(self, tag):
+        return FakeRockwellResult(self.memory[tag])
+
+    def write(self, request):
+        tag, value = request
+        self.writes.append((tag, value))
+        self.memory[tag] = value
+        if tag == "PUMP_COMMAND":
+            self.memory["PUMP_STATE"] = bool(value)
+        return FakeRockwellResult(value)
 class SmallPumpControlTests(unittest.TestCase):
     def test_partir_writes_true_then_false_to_configured_node(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -328,5 +394,112 @@ plcs:
             self.assertEqual(value, 125)
 
 
+    def test_rockwell_pump_start_and_stop_change_configured_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "small_sim.yml"
+            config_path.write_text(ROCKWELL_CONFIG, encoding="utf-8")
+            memory = {
+                "PUMP_COMMAND": False,
+                "PUMP_STATE": False,
+                "DOSING_VALUE": 12,
+            }
+            writes: list[tuple[str, object]] = []
+            clients: list[FakeRockwellClient] = []
+
+            def client_factory(endpoint, slot, timeout):
+                client = FakeRockwellClient(
+                    endpoint,
+                    slot,
+                    timeout,
+                    memory,
+                    writes,
+                )
+                clients.append(client)
+                return client
+
+            start_target = pulse_pump_action(
+                "small_sim",
+                "partir",
+                module_id="recirculation_pump",
+                config_path=config_path,
+                client_factory=client_factory,
+            )
+            self.assertEqual(start_target.driver, "rockwell")
+            self.assertEqual(start_target.node_id, "PUMP_COMMAND")
+            self.assertEqual(start_target.action_mode, "set")
+            self.assertEqual(start_target.pulse_seconds, 0)
+            self.assertTrue(memory["PUMP_STATE"])
+
+            stop_target = pulse_pump_action(
+                "small_sim",
+                "parar",
+                module_id="recirculation_pump",
+                config_path=config_path,
+                client_factory=client_factory,
+            )
+            self.assertEqual(stop_target.logical_tag, "Partir")
+            self.assertFalse(memory["PUMP_STATE"])
+            self.assertEqual(
+                writes,
+                [("PUMP_COMMAND", True), ("PUMP_COMMAND", False)],
+            )
+            self.assertTrue(all(not client.opened for client in clients))
+
+    def test_rockwell_dosifier_write_uses_configured_tag_and_preserves_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "small_sim.yml"
+            config_path.write_text(ROCKWELL_CONFIG, encoding="utf-8")
+            memory = {
+                "PUMP_COMMAND": False,
+                "PUMP_STATE": False,
+                "DOSING_VALUE": 12,
+            }
+            writes: list[tuple[str, object]] = []
+
+            def client_factory(endpoint, slot, timeout):
+                return FakeRockwellClient(endpoint, slot, timeout, memory, writes)
+
+            target, previous_value, new_value = write_configured_value(
+                "small_sim",
+                "set_contador",
+                42,
+                module_id="dosif001",
+                config_path=config_path,
+                client_factory=client_factory,
+            )
+
+            self.assertEqual(target.driver, "rockwell")
+            self.assertEqual(target.node_id, "DOSING_VALUE")
+            self.assertEqual(previous_value, 12)
+            self.assertEqual(new_value, 42)
+            self.assertEqual(memory["DOSING_VALUE"], 42)
+            self.assertFalse(memory["PUMP_STATE"])
+
+    def test_repository_small_sim_resolves_rockwell_control_tags(self) -> None:
+        config_path = (
+            Path(__file__).resolve().parents[2]
+            / "collector_python"
+            / "config"
+            / "small_sim.yml"
+        )
+
+        pump_target = resolve_pump_control_target(
+            "small_sim",
+            "partir",
+            module_id="recirculation_pump",
+            config_path=config_path,
+        )
+        dosage_target = resolve_value_write_target(
+            "small_sim",
+            "set_contador",
+            module_id="dosif001",
+            config_path=config_path,
+        )
+
+        self.assertEqual(pump_target.driver, "rockwell")
+        self.assertEqual(pump_target.logical_tag, "Partir")
+        self.assertEqual(pump_target.node_id, "Partir")
+        self.assertEqual(dosage_target.logical_tag, "CONTADOR")
+        self.assertEqual(dosage_target.node_id, "CONTADOR")
 if __name__ == "__main__":
     unittest.main()

@@ -17,6 +17,7 @@ class _FakeInsert:
             state="state",
             value_num="value_num",
             value_bool="value_bool",
+            source="source",
         )
 
     def values(self, rows):
@@ -74,6 +75,7 @@ def test_ingest_persists_scada_minute_only_when_minute_rolls(monkeypatch):
     persisted_by_tag = {row["tag_id"]: row for row in persisted_rows}
     assert persisted_by_tag["FIT001"]["bucket"] == datetime(2026, 4, 16, 12, 0, 0, tzinfo=timezone.utc)
     assert persisted_by_tag["FIT001"]["value_num"] == 2.5
+    assert persisted_by_tag["FIT001"]["source"] == "Collector_online"
 
 
 def test_ingest_persists_state_tag_float_value_in_state_column(monkeypatch):
@@ -107,6 +109,7 @@ def test_ingest_persists_state_tag_float_value_in_state_column(monkeypatch):
             "state": 10,
             "value_num": None,
             "value_bool": None,
+            "source": "Collector_online",
         }
     ]
 

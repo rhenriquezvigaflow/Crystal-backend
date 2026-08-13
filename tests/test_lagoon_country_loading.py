@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from types import SimpleNamespace
 
@@ -64,6 +64,7 @@ def test_product_lagoon_payload_includes_country_fields():
         country=SimpleNamespace(name="Colombia"),
         timezone="America/Bogota",
         ip="192.168.14.10",
+        scada_layout="layout7",
         enable=True,
         product_type=ProductType.CRYSTAL,
     )
@@ -78,6 +79,7 @@ def test_product_lagoon_payload_includes_country_fields():
 
     assert payload["country_id"] == 7
     assert payload["country_name"] == "Colombia"
+    assert payload["scada_layout"] == "layout7"
 
 
 def test_lagoon_permissions_are_loaded_in_one_batch_query():

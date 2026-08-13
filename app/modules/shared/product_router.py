@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
@@ -102,6 +102,7 @@ def _map_lagoon_access(
         "country_name": lagoon.country.name if lagoon.country else None,
         "timezone": lagoon.timezone,
         "ip": lagoon.ip,
+        "scada_layout": getattr(lagoon, "scada_layout", None),
         "enable": bool(lagoon.enable),
         "can_view": True,
         "can_edit": can_edit,

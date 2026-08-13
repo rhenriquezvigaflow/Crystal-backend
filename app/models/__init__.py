@@ -1,5 +1,7 @@
 from app.models.scada_event import ScadaEvent
 from app.models.scada_minute import ScadaMinute
+from app.models.offline_collector_node import OfflineCollectorNode
+from app.models.offline_transfer import OfflineTransfer, OfflineTransferPart
 from app.models.country import Country
 from app.models.lagoon import Lagoon
 from app.models.user import User

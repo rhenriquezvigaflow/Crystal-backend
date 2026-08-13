@@ -5,6 +5,7 @@ Backend FastAPI para ingesta SCADA, lectura realtime, historico, eventos, RBAC y
 ## Alcance Actual
 
 - `POST /ingest/scada` protegido con `X-Api-Key`.
+- Transferencia offline resumible por archivos `CSV.gz`, autenticada por nodo.
 - Estado realtime en memoria + broadcast WebSocket.
 - Persistencia de `scada_minute` y `scada_event`.
 - Consultas SCADA (`realtime`, `history`, `kpis`, `events`, `pump-events`).
@@ -128,6 +129,18 @@ Ingesta:
 
 - `POST /ingest/scada`
 
+Transferencia offline:
+
+- `POST /offline-transfer/transfers`
+- `GET /offline-transfer/transfers/{transfer_id}`
+- `GET /offline-transfer/transfers/{transfer_id}/status`
+- `PUT /offline-transfer/transfers/{transfer_id}/parts/{part_number}`
+- `POST /offline-transfer/transfers/{transfer_id}/complete`
+
+`POST /offline-transfer/transfers/{transfer_id}/complete` reconstruye e
+importa el CSV.gz sincronicamente mediante staging temporal y PostgreSQL
+`COPY`. Solo responde `VERIFIED` despues del commit.
+
 El payload acepta `product_type` opcional (`crystal` o `small`). Si viene informado, debe coincidir con `lagoons.product_type`; si no coincide, el backend responde `409 Lagoon product_type mismatch`.
 
 SCADA:
@@ -201,6 +214,7 @@ WebSocket:
 - `docs/ALARMAS_ACTUALES_Y_LOGICA.md`: motor de alarmas.
 - `docs/EMAIL_NOTIFICATIONS.md`: flujo SMTP.
 - `docs/README_ALARM_THRESHOLDS_API.md`: contrato PT/FIT.
+- `docs/OFFLINE_TRANSFER.md`: arquitectura, contrato, despliegue y operacion del backfill resumible.
 
 ## Notas Operativas
 

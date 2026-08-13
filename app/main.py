@@ -13,6 +13,7 @@ from app.auth.auth import router as auth_router
 from app.auth.routers.lagoons_router import router as rbac_lagoons_router
 from app.routers.health import router as health_router
 from app.routers.ingest import router as ingest_router
+from app.routers.offline_transfer import router as offline_transfer_router
 from app.routers.alarm_thresholds import router as alarm_thresholds_router
 from app.routers.email import router as email_router
 from app.routers.scada import router as scada_router
@@ -146,6 +147,7 @@ app.include_router(health_router)
 app.include_router(auth_router)
 app.include_router(rbac_lagoons_router)
 app.include_router(ingest_router)
+app.include_router(offline_transfer_router)
 app.include_router(alarm_thresholds_router)
 app.include_router(alarm_thresholds_router, prefix="/crystal")
 app.include_router(alarm_thresholds_router, prefix="/small")

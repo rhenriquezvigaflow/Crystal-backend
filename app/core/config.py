@@ -180,6 +180,19 @@ class Settings(BaseSettings):
         ge=0,
         description="Minimum interval between collector metadata syncs per lagoon",
     )
+    BACKFILL_STORAGE_PATH: Path = Field(
+        default=Path("D:/CrystalBackfill"),
+        description="Storage root for resumable CSV.gz backfill transfers",
+    )
+    BACKFILL_MAX_ROWS: int = Field(default=20000, gt=0)
+    BACKFILL_MAX_PART_SIZE_MB: int = Field(default=2, gt=0)
+    BACKFILL_MAX_PARTS: int = Field(default=1000, gt=0)
+    BACKFILL_MAX_FILE_SIZE_MB: int = Field(default=2048, gt=0)
+    BACKFILL_STREAM_BLOCK_BYTES: int = Field(default=64 * 1024, ge=4096)
+    BACKFILL_IMPORT_STATEMENT_TIMEOUT_MS: int = Field(
+        default=600000,
+        gt=0,
+    )
     INGEST_RUNTIME_RESET_LOCK_TIMEOUT_SEC: float = Field(
         default=1,
         description="Timeout used to acquire the ingest runtime reset lock in seconds",
